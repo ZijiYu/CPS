@@ -16,7 +16,7 @@
 ║                                                                ║
 ╚════════════════════════════════════════════════════════════════╝
 
-  Version: 1.0  |  https://github.com/ZijiYu/codex-profile
+  Version: 1.0  |  https://github.com/ZijiYu/codex-profiles
 ```
 
 CPX 是一个很小的终端工具，用来快速切换 Codex Desktop 的 profile、账号和调用方式。
@@ -39,14 +39,14 @@ work     -> OPENAI_API_KEY
 从当前 checkout 安装：
 
 ```bash
-cd /Users/ken/projects/discord/codex-profile-switcher
+cd /Users/ken/projects/discord/codex-profiles
 python3 -m pip install -e .
 ```
 
 也可以直接运行：
 
 ```bash
-/Users/ken/projects/discord/codex-profile-switcher/bin/cpx
+/Users/ken/projects/discord/codex-profiles/bin/cpx
 ```
 
 ## 快速开始
@@ -185,4 +185,4 @@ CPX 在切换 profile 前，也会备份当前 active 的 `~/.codex` 文件。
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ZijiYu/codex-profile&type=Date)](https://www.star-history.com/?type=date&repos=ZijiYu%2Fcodex-profile)
+[![Star History Chart](https://api.star-history.com/svg?repos=ZijiYu/codex-profiles&type=Date)](https://www.star-history.com/?type=date&repos=ZijiYu%2Fcodex-profiles)

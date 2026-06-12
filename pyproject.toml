@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "codex-profile-switcher"
+name = "codex-profiles"
 version = "0.1.0"
 description = "A tiny terminal UI for switching Codex Desktop auth/API profiles."
 readme = "README.md"
@@ -12,7 +12,7 @@ authors = [{ name = "Ken" }]
 dependencies = []
 
 [project.scripts]
-codex-profile-switcher = "codex_profile_switcher.cli:main"
+codex-profiles = "codex_profile_switcher.cli:main"
 cpx = "codex_profile_switcher.cli:main"
 
 [tool.setuptools.packages.find]

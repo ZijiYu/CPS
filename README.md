@@ -16,7 +16,7 @@
 ║                                                                ║
 ╚════════════════════════════════════════════════════════════════╝
 
-  Version: 1.0  |  https://github.com/ZijiYu/codex-profile
+  Version: 1.0  |  https://github.com/ZijiYu/codex-profiles
 ```
 
 CPX is a tiny terminal tool for switching Codex Desktop profiles fast.
@@ -39,14 +39,14 @@ No database. No daemon. No dependencies. Just small files and a terminal UI.
 From this checkout:
 
 ```bash
-cd /Users/ken/projects/discord/codex-profile-switcher
+cd /Users/ken/projects/discord/codex-profiles
 python3 -m pip install -e .
 ```
 
 Or run it directly:
 
 ```bash
-/Users/ken/projects/discord/codex-profile-switcher/bin/cpx
+/Users/ken/projects/discord/codex-profiles/bin/cpx
 ```
 
 ## Quick Start
@@ -185,4 +185,4 @@ CPX also backs up the current active `~/.codex` files before switching profiles.
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ZijiYu/codex-profile&type=Date)](https://www.star-history.com/?type=date&repos=ZijiYu%2Fcodex-profile)
+[![Star History Chart](https://api.star-history.com/svg?repos=ZijiYu/codex-profiles&type=Date)](https://www.star-history.com/?type=date&repos=ZijiYu%2Fcodex-profiles)

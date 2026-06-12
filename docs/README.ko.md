@@ -16,7 +16,7 @@
 ║                                                                ║
 ╚════════════════════════════════════════════════════════════════╝
 
-  Version: 1.0  |  https://github.com/ZijiYu/codex-profile
+  Version: 1.0  |  https://github.com/ZijiYu/codex-profiles
 ```
 
 CPX는 Codex Desktop의 profile, 계정, 호출 방식을 빠르게 전환하기 위한 작은 터미널 도구입니다.
@@ -39,14 +39,14 @@ work     -> OPENAI_API_KEY
 현재 checkout에서 설치:
 
 ```bash
-cd /Users/ken/projects/discord/codex-profile-switcher
+cd /Users/ken/projects/discord/codex-profiles
 python3 -m pip install -e .
 ```
 
 또는 직접 실행:
 
 ```bash
-/Users/ken/projects/discord/codex-profile-switcher/bin/cpx
+/Users/ken/projects/discord/codex-profiles/bin/cpx
 ```
 
 ## Quick Start
@@ -185,4 +185,4 @@ CPX는 profile을 전환하기 전에 현재 active 상태인 `~/.codex` 파일�
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ZijiYu/codex-profile&type=Date)](https://www.star-history.com/?type=date&repos=ZijiYu%2Fcodex-profile)
+[![Star History Chart](https://api.star-history.com/svg?repos=ZijiYu/codex-profiles&type=Date)](https://www.star-history.com/?type=date&repos=ZijiYu%2Fcodex-profiles)
