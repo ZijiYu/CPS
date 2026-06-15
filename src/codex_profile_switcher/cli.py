@@ -8,7 +8,7 @@ from .tui import run_tui
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="cpx")
+    parser = argparse.ArgumentParser(prog="cps")
     parser.add_argument("--root", type=Path, help="profile root, defaults to ~/.codex-profiles")
     parser.add_argument("--codex-dir", type=Path, help="active Codex dir, defaults to ~/.codex")
 
