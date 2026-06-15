@@ -2,6 +2,8 @@
 
 [English](../README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
+> Note: this translation may lag behind the latest Auth + API / Route two-column TUI. See the English or Simplified Chinese README for the current interaction model.
+
 ```text
 ╔════════════════════════════════════════════════════════════════╗
 ║                                                                ║
@@ -16,7 +18,7 @@
 ║                                                                ║
 ╚════════════════════════════════════════════════════════════════╝
 
-  Version: 1.0.2  |  https://github.com/ZijiYu/codex-profiles
+  Version: 1.0.3  |  https://github.com/ZijiYu/codex-profiles
 ```
 
 CPS は、Codex の設定をすばやく切り替えるための小さなターミナルツールです。

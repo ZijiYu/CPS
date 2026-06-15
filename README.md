@@ -16,10 +16,10 @@
 ║                                                                ║
 ╚════════════════════════════════════════════════════════════════╝
 
-  Version: 1.0.2  |  https://github.com/ZijiYu/codex-profiles
+  Version: 1.0.3  |  https://github.com/ZijiYu/codex-profiles
 ```
 
-CPS is a tiny terminal tool for switching Codex profiles, accounts, and API setups fast.
+CPS is a tiny terminal tool for composing Codex auth profiles and API routes fast.
 
 It solves a practical problem: many Codex users do not have just one account or one configuration.
 
@@ -34,19 +34,26 @@ test      -> temporary model or parameter experiments
 
 Manually editing `~/.codex/config.toml`, swapping `auth.json`, changing environment variables, or replacing API settings by hand gets messy quickly. It also makes it easy to mix personal accounts with work credentials.
 
-CPS keeps each Codex setup as an independent profile. When you switch, CPS copies that profile into the active `~/.codex` directory, which is the directory Codex Desktop actually reads.
+CPS keeps Codex setups as profiles, then lets you choose which profile provides `auth.json` and which profile provides the API route config. The composed result is written into the active `~/.codex` directory, which is the directory Codex Desktop actually reads.
 
-Use it like this:
+Open the TUI:
 
 ```bash
-cps use personal
-cps use work
-cps use proxy
+cps
 ```
 
-After switching, restart Codex so it reloads the active config.
+Select one Auth item and one API / Route item, press `m` to apply the mix, then press `R` to restart Codex.
 
 No database. No daemon. No background service. CPS only manages local config files so multi-account, multi-API, and multi-environment Codex usage stays clean.
+
+## Update 1.0.3
+
+- Reworked the default TUI around two explicit columns: Auth and API / Route.
+- Added hybrid composition with `cps mix <auth> <route>` and automatic last-mix restore.
+- Split initialization into `cps init auth`, `cps init route`, and `cps init full`.
+- Added route helpers for official and custom OpenAI-compatible API endpoints.
+- Added Codex restart support from the TUI with `R` and from the CLI with `cps restart`.
+- Normalized custom API providers during hybrid mix to avoid Codex treating custom routes as official ChatGPT auth refreshes.
 
 ## Why
 
@@ -75,10 +82,10 @@ The active Codex config still lives in:
 When you run:
 
 ```bash
-cps use work
+cps mix personal work
 ```
 
-CPS switches the `work` profile into `~/.codex`, so Codex uses that setup.
+CPS writes `auth.json` from `personal` and route config from `work` into `~/.codex`, so Codex uses that composed active setup.
 
 Think of it as a small Codex config switcher: keep many saved profiles, activate the one you need.
 
@@ -105,16 +112,18 @@ Or run the script directly:
 
 ## Quick Start
 
-Create a profile from the current `~/.codex`:
+Create an Auth profile and start Codex login:
 
 ```bash
-cps init personal
+cps init auth personal
 ```
 
-If you have another setup, such as a work API key, create another profile:
+This prepares an isolated profile directory for `personal`, then runs `codex login` so that Auth profile gets its own `auth.json`.
+
+Create an API / Route profile from the current `~/.codex`:
 
 ```bash
-cps init work
+cps init route work
 ```
 
 Login a profile separately:
@@ -123,19 +132,40 @@ Login a profile separately:
 cps login personal
 ```
 
-Switch to a profile:
+Compose personal auth with work API route:
 
 ```bash
-cps use personal
+cps mix personal work
 ```
 
-Or:
+Replacing `~/.codex` with a full profile is still available as an advanced command:
 
 ```bash
 cps use work
 ```
 
 After switching, restart Codex so it reloads `~/.codex/config.toml`.
+
+Route model calls through a custom OpenAI-compatible endpoint while preserving the current ChatGPT login:
+
+```bash
+cps route custom \
+  --base-url https://your-endpoint.example.com/v1 \
+  --model gpt-5.5 \
+  --api-key sk-...
+```
+
+Switch routing back to the official provider without replacing `auth.json`:
+
+```bash
+cps route official --model gpt-5.5
+```
+
+Combine auth from one profile with route config from another:
+
+```bash
+cps mix personal work
+```
 
 ## Terminal UI
 
@@ -149,8 +179,8 @@ The TUI shows:
 
 ```text
 top       CPS logo and active mode
-left      saved profiles and deleted profiles
-center    activity stream
+left      Auth and API / Route columns
+right     activity stream
 bottom    command composer
 ```
 
@@ -158,7 +188,9 @@ Keyboard:
 
 ```text
 Up/Down  select a profile
-Enter    switch selected profile when input is empty
+Left/Right or Tab  switch Auth / API column
+Enter    select current item when input is empty
+m        apply selected Auth + API / Route mix
 Esc      clear input
 ?        toggle help
 r        refresh
@@ -170,17 +202,21 @@ Slash commands:
 ```text
 /status
 /list
-/use work
 /login personal
-/save work
-/init personal
+/init auth personal
+/init route work
 /delete old-profile
 /deleted
 /restore old-profile-20260612-153000
 /path work
+/mix personal work
+/route custom --base-url https://your-endpoint.example.com/v1 --model gpt-5.5 --api-key sk-...
+/route official --model gpt-5.5
 /help
 /quit
 ```
+
+`/use <profile>` replaces `~/.codex` with a full profile. For day-to-day Auth + API composition, prefer the two-column TUI or `cps mix <auth> <route>`.
 
 ## CLI Commands
 
@@ -189,12 +225,15 @@ cps status
 cps list
 cps deleted
 cps path work
-cps init work
-cps save work
+cps init auth personal
+cps init route work
 cps use work
 cps login personal
 cps delete old-profile
 cps restore old-profile-20260612-153000
+cps mix personal work
+cps route custom --base-url https://your-endpoint.example.com/v1 --model gpt-5.5 --api-key sk-...
+cps route official --model gpt-5.5
 ```
 
 ## Profile Modes
@@ -214,6 +253,21 @@ env_key = "OPENAI_API_KEY"
 ```
 
 In the TUI, API profiles may still show an `auth.json` file if one exists in the folder, but CPS marks that auth as ignored when the profile mode is API.
+
+Hybrid route:
+
+```toml
+model_provider = "custom"
+preferred_auth_method = "chatgpt"
+
+[model_providers.custom]
+base_url = "https://your-endpoint.example.com/v1"
+requires_openai_auth = true
+wire_api = "responses"
+experimental_bearer_token = "sk-..."
+```
+
+Hybrid routing edits `config.toml` only. It preserves the existing `auth.json`, so ChatGPT login stays in place while model calls use the custom provider.
 
 ## Safety
 

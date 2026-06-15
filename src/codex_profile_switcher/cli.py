@@ -14,15 +14,33 @@ def main() -> None:
 
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("tui")
-    sub.add_parser("status")
-    sub.add_parser("list")
-    sub.add_parser("deleted")
-    for command in ("init", "save", "use", "login", "path", "delete"):
+    sub.add_parser("status", help="show active config and saved profile structure")
+    sub.add_parser("list", help="list saved profiles")
+    sub.add_parser("deleted", help="list reversibly deleted profiles")
+    sub.add_parser("restart", help="restart Codex Desktop")
+    init = sub.add_parser("init", help="initialize auth, route, or full profile from active ~/.codex")
+    init.add_argument("kind_or_profile", metavar="auth|route|full|profile")
+    init.add_argument("profile", nargs="?", help="profile name when kind is auth, route, or full")
+    for command in ("save", "use", "login", "path", "delete"):
         p = sub.add_parser(command)
         p.add_argument("profile")
+    mix = sub.add_parser("mix", help="apply auth from one profile and route config from another")
+    mix.add_argument("auth_profile")
+    mix.add_argument("route_profile")
     restore = sub.add_parser("restore")
     restore.add_argument("deleted_profile")
     restore.add_argument("profile", nargs="?")
+    route = sub.add_parser("route", help="edit active provider routing without replacing auth.json")
+    route_sub = route.add_subparsers(dest="route_command", required=True)
+    custom = route_sub.add_parser("custom", help="route model calls through a custom provider")
+    custom.add_argument("--base-url", required=True)
+    custom.add_argument("--model", required=True)
+    custom.add_argument("--api-key", required=True)
+    custom.add_argument("--provider", default="custom")
+    custom.add_argument("--wire-api", default="responses")
+    official = route_sub.add_parser("official", help="route model calls back to the official provider")
+    official.add_argument("--model")
+    official.add_argument("--provider", default="OpenAI")
 
     args = parser.parse_args()
     store = ProfileStore(root=args.root, codex_dir=args.codex_dir)
@@ -41,13 +59,29 @@ def main() -> None:
     elif command == "deleted":
         for name in store.list_deleted():
             print(name)
+    elif command == "restart":
+        code = store.restart_codex()
+        print(f"restart Codex exited with {code}")
     elif command == "init":
-        print(store.init_profile(args.profile))
+        kind, profile = parse_init_args(args.kind_or_profile, args.profile)
+        if kind == "auth":
+            raise SystemExit(store.create_auth_profile(profile))
+        elif kind == "route":
+            print(store.init_route_profile(profile))
+        else:
+            print(store.init_profile(profile))
     elif command == "save":
         print(store.save_profile(args.profile))
     elif command == "use":
         backup = store.use_profile(args.profile)
         print(f"switched to {args.profile}")
+        print(f"backup: {backup}")
+        print("restart Codex Desktop if it is already open")
+    elif command == "mix":
+        backup = store.mix_profiles(args.auth_profile, args.route_profile)
+        print(f"mixed auth={args.auth_profile} route={args.route_profile}")
+        print("auth.json: from auth profile")
+        print("config.toml: from route profile")
         print(f"backup: {backup}")
         print("restart Codex Desktop if it is already open")
     elif command == "login":
@@ -61,6 +95,29 @@ def main() -> None:
     elif command == "restore":
         restored_path = store.restore_profile(args.deleted_profile, args.profile)
         print(f"restored to: {restored_path}")
+    elif command == "route":
+        if args.route_command == "custom":
+            backup = store.route_custom(
+                base_url=args.base_url,
+                model=args.model,
+                api_key=args.api_key,
+                provider=args.provider,
+                wire_api=args.wire_api,
+            )
+            print(f"routed to custom provider: {args.provider}")
+            print(f"model: {args.model}")
+            print(f"base_url: {args.base_url}")
+            print("auth.json: preserved")
+            print(f"backup: {backup}")
+            print("restart Codex Desktop if it is already open")
+        elif args.route_command == "official":
+            backup = store.route_official(model=args.model, provider=args.provider)
+            print(f"routed to official provider: {args.provider}")
+            if args.model:
+                print(f"model: {args.model}")
+            print("auth.json: preserved")
+            print(f"backup: {backup}")
+            print("restart Codex Desktop if it is already open")
 
 
 def print_status(status) -> None:
@@ -77,6 +134,14 @@ def print_status(status) -> None:
     print(f"  api.config.toml: {'yes' if status.api_config_present else 'no'}")
     print(f"  auth.json: {'yes' if status.auth_present else 'no'}")
     print(f"  auth_mode: {status.auth_mode or '-'}")
+
+
+def parse_init_args(kind_or_profile: str, profile: str | None) -> tuple[str, str]:
+    if profile is None:
+        return "full", kind_or_profile
+    if kind_or_profile not in {"auth", "route", "full"}:
+        raise SystemExit("usage: cps init [auth|route|full] <profile>")
+    return kind_or_profile, profile
 
 
 if __name__ == "__main__":
