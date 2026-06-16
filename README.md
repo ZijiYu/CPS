@@ -4,7 +4,7 @@
 
 ```text
 ╔════════════════════════════════════════════════════════════════╗
-║   CPS - Codex Profile Switcher                                ║
+║   CPS - Codex Profile Switcher                                 ║
 ╚════════════════════════════════════════════════════════════════╝
 
 Version: 1.0.4
@@ -22,8 +22,6 @@ API / Route -> config.toml / provider / model / base_url / API key
 ```
 
 Then you can combine them without manually editing `~/.codex`.
-
-✨ Full Documentation: `cps doc`
 
 ```text
 $ cps
