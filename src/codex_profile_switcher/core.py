@@ -37,7 +37,7 @@ class ProfileStore:
         self.codex_dir = codex_dir or Path(os.environ.get("CODEX_DIR", "~/.codex")).expanduser()
 
     def profile_dir(self, name: str) -> Path:
-        return self.root / name
+        return self.root / validate_profile_name(name)
 
     def last_mix_path(self) -> Path:
         return self.root / "last-mix.json"
@@ -121,6 +121,46 @@ class ProfileStore:
             if path.exists():
                 path.unlink()
         self._ensure_file_auth_store(target / "config.toml")
+        return target
+
+    def create_route_profile(
+        self,
+        name: str,
+        *,
+        base_url: str,
+        model: str,
+        api_key: str,
+        provider: str = "custom",
+        wire_api: str = "responses",
+    ) -> Path:
+        if not name.strip():
+            raise ValueError("profile name is required")
+        target = self.profile_dir(name.strip())
+        if target.exists():
+            raise FileExistsError(f"profile already exists: {target}")
+        if not base_url.strip():
+            raise ValueError("base_url is required")
+        if not model.strip():
+            raise ValueError("model is required")
+        if not api_key.strip():
+            raise ValueError("api_key is required")
+        if not provider.strip():
+            raise ValueError("provider is required")
+
+        safe_provider = safe_provider_name(provider)
+        if not safe_provider:
+            raise ValueError("provider is required")
+
+        config = rewrite_config_for_custom_route(
+            "",
+            provider=safe_provider,
+            base_url=base_url.strip(),
+            model=model.strip(),
+            api_key=api_key.strip(),
+            wire_api=wire_api.strip() or "responses",
+        )
+        target.mkdir(parents=True, exist_ok=False)
+        atomic_write(target / "config.toml", config)
         return target
 
     def save_profile(self, name: str) -> Path:
@@ -216,13 +256,14 @@ class ProfileStore:
             raise ValueError("api_key is required")
         if not provider.strip():
             raise ValueError("provider is required")
+        safe_provider = safe_provider_name(provider)
 
         backup = self.backup_current()
         config_path = self.codex_dir / "config.toml"
         config = read_text(config_path)
         rewritten = rewrite_config_for_custom_route(
             config,
-            provider=provider.strip(),
+            provider=safe_provider,
             base_url=base_url.strip(),
             model=model.strip(),
             api_key=api_key.strip(),
@@ -530,6 +571,15 @@ def safe_provider_name(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", name.strip())
     cleaned = cleaned.strip("-_")
     return cleaned or "custom"
+
+
+def validate_profile_name(name: str) -> str:
+    cleaned = name.strip()
+    if not cleaned:
+        raise ValueError("profile name is required")
+    if cleaned in {".", ".."} or "/" in cleaned or "\\" in cleaned:
+        raise ValueError(f"invalid profile name: {name}")
+    return cleaned
 
 
 def route_matches_active(candidate: ProfileStatus, active: ProfileStatus) -> bool:

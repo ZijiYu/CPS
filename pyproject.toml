@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-profiles"
-version = "1.0.3"
+version = "1.0.4"
 description = "Codex Profile Switcher: a tiny terminal UI for switching Codex Desktop auth/API profiles."
 readme = "README.md"
 requires-python = ">=3.10"

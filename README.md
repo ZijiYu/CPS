@@ -16,7 +16,7 @@
 ║                                                                ║
 ╚════════════════════════════════════════════════════════════════╝
 
-  Version: 1.0.3  |  https://github.com/ZijiYu/codex-profiles
+  Version: 1.0.4  |  https://github.com/ZijiYu/codex-profiles
 ```
 
 CPS is a tiny terminal tool for composing Codex auth profiles and API routes fast.
@@ -42,7 +42,7 @@ Open the TUI:
 cps
 ```
 
-Select one Auth item and one API / Route item, press `m` to apply the mix, then press `R` to restart Codex.
+Select one Auth item and one API / Route item, press `m` to apply the selection, then press `R` to restart Codex.
 
 No database. No daemon. No background service. CPS only manages local config files so multi-account, multi-API, and multi-environment Codex usage stays clean.
 
@@ -54,6 +54,14 @@ No database. No daemon. No background service. CPS only manages local config fil
 - Added route helpers for official and custom OpenAI-compatible API endpoints.
 - Added Codex restart support from the TUI with `R` and from the CLI with `cps restart`.
 - Normalized custom API providers during hybrid mix to avoid Codex treating custom routes as official ChatGPT auth refreshes.
+
+## Update 1.0.4
+
+- Moved creation flows into a full-screen menu instead of exposing them in the main shortcut bar.
+- Added full-screen forms for New API Route and New Auth Login.
+- Renamed the main action to Apply Selection for clearer Auth + API composition.
+- Added scroll-aware full-screen pages and compact logo behavior for smaller terminals.
+- Added profile-name validation and provider-name normalization for safer generated config.
 
 ## Why
 
@@ -181,7 +189,7 @@ The TUI shows:
 top       CPS logo and active mode
 left      Auth and API / Route columns
 right     activity stream
-bottom    command composer
+bottom    current-screen shortcut bar
 ```
 
 Keyboard:
@@ -190,7 +198,9 @@ Keyboard:
 Up/Down  select a profile
 Left/Right or Tab  switch Auth / API column
 Enter    select current item when input is empty
-m        apply selected Auth + API / Route mix
+m        apply selected Auth + API / Route
+o        open the menu
+R        restart Codex
 Esc      clear input
 ?        toggle help
 r        refresh
@@ -210,11 +220,14 @@ Slash commands:
 /restore old-profile-20260612-153000
 /path work
 /mix personal work
+/api new
 /route custom --base-url https://your-endpoint.example.com/v1 --model gpt-5.5 --api-key sk-...
 /route official --model gpt-5.5
 /help
 /quit
 ```
+
+Press `o` for the menu when you want to create a route-only API profile or a new Auth login. `/api new` remains available as an advanced command, and `?` opens the full-screen help page.
 
 `/use <profile>` replaces `~/.codex` with a full profile. For day-to-day Auth + API composition, prefer the two-column TUI or `cps mix <auth> <route>`.
 

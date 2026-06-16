@@ -18,7 +18,7 @@
 ║                                                                ║
 ╚════════════════════════════════════════════════════════════════╝
 
-  Version: 1.0.3  |  https://github.com/ZijiYu/codex-profiles
+  Version: 1.0.4  |  https://github.com/ZijiYu/codex-profiles
 ```
 
 CPS は、Codex の設定をすばやく切り替えるための小さなターミナルツールです。

@@ -51,6 +51,14 @@ CPS 会把 `personal` 的 `auth.json` 和 `work` 的 `config.toml` 组合到 `~/
 * TUI 支持按 `R` 重启 Codex，命令行支持 `cps restart`；
 * 混合自定义 API route 时会自动规范 provider，避免 Codex 把自定义 route 当成官方 ChatGPT 登录态去刷新 token。
 
+## 1.0.4 更新
+
+* 创建 API route 和 Auth login 的流程统一放入全屏菜单；
+* 新增 New API Route 和 New Auth Login 全屏表单；
+* 主操作改名为 Apply Selection，强调应用当前选中的 Auth + API；
+* 全屏页面支持滚动，小窗口下自动使用紧凑 logo；
+* 新增 profile 名称校验和 provider 名称规范化，减少生成异常配置的风险。
+
 ## Hybrid Route
 
 除了 Auth + Route 组合，CPS 也支持只编辑当前模型请求路由。
@@ -187,7 +195,7 @@ TUI 布局：
 top       CPS logo 和当前 active 模式
 left      Auth 和 API / Route 两列
 right     activity 事件流
-bottom    命令输入框
+bottom    当前界面的快捷键状态栏
 ```
 
 快捷键：
@@ -196,7 +204,8 @@ bottom    命令输入框
 Up/Down  选择 profile
 Left/Right 或 Tab  切换 Auth / API 列
 Enter    输入框为空时选择当前项
-m        应用当前 Auth + API / Route 组合
+m        应用当前选择的 Auth + API / Route
+o        打开菜单
 R        重启 Codex
 Esc      清空输入
 ?        显示/隐藏帮助
@@ -217,11 +226,14 @@ Slash 命令：
 /restore old-profile-20260612-153000
 /path work
 /mix personal work
+/api new
 /route custom --base-url https://your-endpoint.example.com/v1 --model gpt-5.5 --api-key sk-...
 /route official --model gpt-5.5
 /help
 /quit
 ```
+
+如果要创建新的 API route 或新的 Auth login，推荐在 TUI 中按 `o` 打开菜单。`/api new` 仍然作为高级命令保留；按 `?` 可以打开独立帮助页。
 
 其中 `/use <profile>` 会用某个 profile 整套替换 `~/.codex`。日常组合 Auth 和 API / Route 时，优先使用 TUI 的两列选择或 `cps mix <auth> <route>`。
 
