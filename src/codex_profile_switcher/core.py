@@ -6,13 +6,24 @@ import re
 import shutil
 import subprocess
 import tempfile
-import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 
 PROFILE_FILES = ("config.toml", "account.config.toml", "api.config.toml", "auth.json")
+
+# Codex Desktop groups its conversation history by the active model_provider name.
+# Keeping that name constant across every switch is what stops chat history from
+# "disappearing" when you flip between auth and api-key profiles. The name must
+# NOT be a reserved built-in id (Codex rejects `[model_providers.openai]`), so the
+# default is the custom gateway provider used for both auth and api routes.
+DEFAULT_ACTIVE_PROVIDER = "gateway"
+DEFAULT_ENV_KEY = "OPENAI_API_KEY"
+
+# Provider ids that Codex reserves for built-ins and refuses to let configs
+# override with a `[model_providers.<id>]` section (matched case-insensitively).
+RESERVED_PROVIDER_IDS = {"openai"}
 
 
 @dataclass(frozen=True)
@@ -30,11 +41,24 @@ class ProfileStatus:
     config_empty: bool
     api_config_present: bool
 
+    @property
+    def route_uses_auth(self) -> bool:
+        return self.mode in {"auth", "hybrid"}
+
+    @property
+    def auth_is_ignored(self) -> bool:
+        return self.mode == "api" and self.auth_present
+
 
 class ProfileStore:
     def __init__(self, root: Path | None = None, codex_dir: Path | None = None) -> None:
         self.root = root or Path(os.environ.get("CODEX_PROFILE_ROOT", "~/.codex-profiles")).expanduser()
         self.codex_dir = codex_dir or Path(os.environ.get("CODEX_DIR", "~/.codex")).expanduser()
+        configured = os.environ.get("CODEX_ACTIVE_PROVIDER", "").strip()
+        safe = safe_provider_name(configured) if configured else ""
+        if not safe or safe.lower() in RESERVED_PROVIDER_IDS:
+            safe = DEFAULT_ACTIVE_PROVIDER
+        self.active_provider = safe
 
     def profile_dir(self, name: str) -> Path:
         return self.root / validate_profile_name(name)
@@ -105,6 +129,7 @@ class ProfileStore:
         target = self.profile_dir(name)
         target.mkdir(parents=True, exist_ok=True)
         self._copy_named_files(self.codex_dir, target, ("account.config.toml", "config.toml"))
+        atomic_write(target / "config.toml", rewrite_config_for_auth_profile(read_text(target / "config.toml")))
         self._ensure_file_auth_store(target / "config.toml")
         return target
 
@@ -129,8 +154,9 @@ class ProfileStore:
         *,
         base_url: str,
         model: str,
-        api_key: str,
-        provider: str = "custom",
+        api_key: str | None = None,
+        env_key: str | None = DEFAULT_ENV_KEY,
+        provider: str = DEFAULT_ACTIVE_PROVIDER,
         wire_api: str = "responses",
     ) -> Path:
         if not name.strip():
@@ -142,8 +168,8 @@ class ProfileStore:
             raise ValueError("base_url is required")
         if not model.strip():
             raise ValueError("model is required")
-        if not api_key.strip():
-            raise ValueError("api_key is required")
+        if not (api_key and api_key.strip()) and not (env_key and env_key.strip()):
+            raise ValueError("api_key or env_key is required")
         if not provider.strip():
             raise ValueError("provider is required")
 
@@ -156,7 +182,8 @@ class ProfileStore:
             provider=safe_provider,
             base_url=base_url.strip(),
             model=model.strip(),
-            api_key=api_key.strip(),
+            api_key=api_key.strip() if api_key else None,
+            env_key=env_key.strip() if env_key else None,
             wire_api=wire_api.strip() or "responses",
         )
         target.mkdir(parents=True, exist_ok=False)
@@ -171,7 +198,9 @@ class ProfileStore:
         if not source.exists():
             raise FileNotFoundError(f"profile does not exist: {source}")
         backup = self.backup_current()
-        self._copy_profile_files(source, self.codex_dir)
+        self._replace_profile_files(source, self.codex_dir)
+        self._normalize_active_home_paths()
+        self._stabilize_active_provider()
         return backup
 
     def mix_profiles(self, auth_name: str, route_name: str) -> Path:
@@ -188,11 +217,13 @@ class ProfileStore:
 
         backup = self.backup_current()
         self.codex_dir.mkdir(parents=True, exist_ok=True)
-        self._copy_named_files(auth_source, self.codex_dir, ("auth.json", "account.config.toml"))
-        self._copy_named_files(route_source, self.codex_dir, ("config.toml", "api.config.toml"))
+        self._replace_named_files(auth_source, self.codex_dir, ("auth.json", "account.config.toml"))
+        self._replace_named_files(route_source, self.codex_dir, ("config.toml", "api.config.toml"))
         route_status = self.status_for_path(route_name, route_source)
         if route_status.mode == "api":
             self._normalize_active_api_route(route_name)
+        self._normalize_active_home_paths()
+        self._stabilize_active_provider()
         self._ensure_file_auth_store(self.codex_dir / "config.toml")
         self.write_last_mix(auth_name, route_name)
         return backup
@@ -244,16 +275,17 @@ class ProfileStore:
         *,
         base_url: str,
         model: str,
-        api_key: str,
-        provider: str = "custom",
+        api_key: str | None = None,
+        env_key: str | None = DEFAULT_ENV_KEY,
+        provider: str = DEFAULT_ACTIVE_PROVIDER,
         wire_api: str = "responses",
     ) -> Path:
         if not base_url.strip():
             raise ValueError("base_url is required")
         if not model.strip():
             raise ValueError("model is required")
-        if not api_key.strip():
-            raise ValueError("api_key is required")
+        if not (api_key and api_key.strip()) and not (env_key and env_key.strip()):
+            raise ValueError("api_key or env_key is required")
         if not provider.strip():
             raise ValueError("provider is required")
         safe_provider = safe_provider_name(provider)
@@ -266,13 +298,15 @@ class ProfileStore:
             provider=safe_provider,
             base_url=base_url.strip(),
             model=model.strip(),
-            api_key=api_key.strip(),
+            api_key=api_key.strip() if api_key else None,
+            env_key=env_key.strip() if env_key else None,
             wire_api=wire_api.strip() or "responses",
         )
         atomic_write(config_path, rewritten)
+        self._stabilize_active_provider()
         return backup
 
-    def route_official(self, *, model: str | None = None, provider: str = "OpenAI") -> Path:
+    def route_official(self, *, model: str | None = None, provider: str = DEFAULT_ACTIVE_PROVIDER) -> Path:
         if not provider.strip():
             raise ValueError("provider is required")
         backup = self.backup_current()
@@ -284,13 +318,12 @@ class ProfileStore:
             model=model.strip() if model else None,
         )
         atomic_write(config_path, rewritten)
+        self._stabilize_active_provider()
         return backup
 
     def restart_codex(self) -> int:
-        quit_code = subprocess.call(["osascript", "-e", 'tell application "Codex" to quit'])
-        time.sleep(1)
-        open_code = subprocess.call(["open", "-a", "Codex"])
-        return quit_code or open_code
+        schedule_codex_reopen()
+        return subprocess.call(["osascript", "-e", 'tell application "Codex" to quit'])
 
     def active_status(self) -> ProfileStatus:
         return self.status_for_path("active", self.codex_dir)
@@ -305,12 +338,12 @@ class ProfileStore:
         api_config = read_text(api_config_path)
         combined = "\n".join(part for part in (config, api_config) if part)
         auth = read_auth(path / "auth.json")
-        provider = find_toml_scalar(combined, "model_provider")
+        provider = find_toml_scalar(combined, "model_provider") or infer_provider(combined)
         return ProfileStatus(
             name=name,
             path=path,
             exists=path.exists(),
-            mode=detect_mode(combined, auth),
+            mode=detect_mode(combined, auth, provider),
             model=find_toml_scalar(combined, "model"),
             provider=provider,
             base_url=find_provider_scalar(combined, provider, "base_url"),
@@ -325,12 +358,23 @@ class ProfileStore:
         target.mkdir(parents=True, exist_ok=True)
         self._copy_named_files(source, target, PROFILE_FILES)
 
+    def _replace_profile_files(self, source: Path, target: Path) -> None:
+        self._replace_named_files(source, target, PROFILE_FILES)
+
     def _copy_named_files(self, source: Path, target: Path, names: tuple[str, ...]) -> None:
         target.mkdir(parents=True, exist_ok=True)
         for name in names:
             src = source / name
             if src.exists():
                 shutil.copy2(src, target / name)
+
+    def _replace_named_files(self, source: Path, target: Path, names: tuple[str, ...]) -> None:
+        target.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            dst = target / name
+            if dst.exists():
+                dst.unlink()
+        self._copy_named_files(source, target, names)
 
     def _ensure_file_auth_store(self, config_path: Path) -> None:
         if not config_path.exists():
@@ -357,6 +401,40 @@ class ProfileStore:
         )
         atomic_write(config_path, rewritten)
 
+    def _normalize_active_home_paths(self) -> None:
+        config_path = self.codex_dir / "config.toml"
+        config = read_text(config_path)
+        if not config:
+            return
+        rewritten = rewrite_embedded_home_paths(config, self.codex_dir)
+        if rewritten != config:
+            atomic_write(config_path, rewritten)
+
+    def _stabilize_active_provider(self) -> None:
+        """Normalize the active config to a single, Codex-valid provider name.
+
+        Codex Desktop buckets conversation history by the active model_provider
+        name, so every switch (mix / use / route) must land on the same name or
+        the previous history drops out of the sidebar. Codex also *rejects* any
+        `[model_providers.openai]` section (case-insensitive) because `openai` is
+        a reserved built-in id, so we can never normalize onto that name.
+
+        Rules applied here:
+        - A route with custom routing (base_url / env_key / bearer) is renamed to
+          the stable, non-reserved `active_provider` name, preserving its keys.
+        - A pure account/official config gets an auth-backed provider section
+          under the same stable name.
+        - Any leftover provider sections (including the illegal reserved ones)
+          are dropped so Codex can load the config.
+        """
+        config_path = self.codex_dir / "config.toml"
+        config = read_text(config_path)
+        if not config:
+            return
+        rewritten = normalize_active_provider_config(config, canonical=self.active_provider)
+        if rewritten != config:
+            atomic_write(config_path, rewritten)
+
 
 def read_text(path: Path) -> str:
     try:
@@ -370,6 +448,26 @@ def read_auth(path: Path) -> dict:
         return json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
+
+
+def schedule_codex_reopen(timeout_seconds: int = 60) -> None:
+    script = f"""
+deadline=$(( $(date +%s) + {timeout_seconds} ))
+while pgrep -x Codex >/dev/null 2>&1; do
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    exit 0
+  fi
+  sleep 0.5
+done
+open -a Codex >/dev/null 2>&1
+"""
+    subprocess.Popen(
+        ["nohup", "sh", "-c", script],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
 
 def atomic_write(path: Path, text: str) -> None:
@@ -455,9 +553,15 @@ def rewrite_config_for_custom_route(
     provider: str,
     base_url: str,
     model: str,
-    api_key: str,
-    wire_api: str,
+    api_key: str | None = None,
+    env_key: str | None = DEFAULT_ENV_KEY,
+    wire_api: str = "responses",
 ) -> str:
+    provider = safe_provider_name(provider)
+    use_bearer_token = bool(api_key and api_key.strip())
+    credential_value = api_key.strip() if use_bearer_token and api_key else (env_key or DEFAULT_ENV_KEY).strip()
+    if not credential_value:
+        raise ValueError("api_key or env_key is required")
     sections = split_toml_sections(text)
     section_name = f"[model_providers.{provider}]"
     updated: list[tuple[str, list[str]]] = []
@@ -473,10 +577,17 @@ def rewrite_config_for_custom_route(
             found_provider = True
             lines = set_toml_string(lines, "name", provider)
             lines = set_toml_string(lines, "base_url", base_url)
-            lines = set_toml_bool(lines, "requires_openai_auth", True)
             lines = set_toml_string(lines, "wire_api", wire_api)
-            lines = set_toml_string(lines, "experimental_bearer_token", api_key)
-            lines = remove_toml_key(lines, "env_key")
+            if use_bearer_token:
+                lines = set_toml_bool(lines, "requires_openai_auth", True)
+                lines = set_toml_string(lines, "experimental_bearer_token", credential_value)
+                lines = remove_toml_key(lines, "env_key")
+            else:
+                lines = set_toml_bool(lines, "requires_openai_auth", False)
+                lines = set_toml_string(lines, "env_key", credential_value)
+                lines = remove_toml_key(lines, "experimental_bearer_token")
+        elif section.startswith("[model_providers."):
+            continue
         updated.append((section, lines))
 
     if not found_provider:
@@ -489,18 +600,47 @@ def rewrite_config_for_custom_route(
                     f"{section_name}\n",
                     f'name = "{escape_toml_string(provider)}"\n',
                     f'base_url = "{escape_toml_string(base_url)}"\n',
-                    "requires_openai_auth = true\n",
                     f'wire_api = "{escape_toml_string(wire_api)}"\n',
-                    f'experimental_bearer_token = "{escape_toml_string(api_key)}"\n',
+                    (
+                        "requires_openai_auth = true\n"
+                        if use_bearer_token
+                        else "requires_openai_auth = false\n"
+                    ),
+                    (
+                        f'experimental_bearer_token = "{escape_toml_string(credential_value)}"\n'
+                        if use_bearer_token
+                        else f'env_key = "{escape_toml_string(credential_value)}"\n'
+                    ),
                 ],
             )
         )
     return render_toml_sections(updated)
 
 
-def rewrite_config_for_official_route(text: str, *, provider: str, model: str | None) -> str:
+def rewrite_config_for_auth_profile(text: str) -> str:
     sections = split_toml_sections(text)
     updated: list[tuple[str, list[str]]] = []
+
+    for section, lines in sections:
+        lines = list(lines)
+        if section == "":
+            for key in ("model", "model_provider", "preferred_auth_method"):
+                lines = remove_toml_key(lines, key)
+            updated.append((section, lines))
+            continue
+        if section.startswith("[model_providers."):
+            continue
+        updated.append((section, lines))
+
+    return render_toml_sections(updated)
+
+
+def rewrite_config_for_official_route(text: str, *, provider: str, model: str | None) -> str:
+    provider = safe_provider_name(provider)
+    sections = split_toml_sections(text)
+    updated: list[tuple[str, list[str]]] = []
+    section_name = f"[model_providers.{provider}]"
+    found_provider = False
     for section, lines in sections:
         lines = list(lines)
         if section == "":
@@ -508,9 +648,18 @@ def rewrite_config_for_official_route(text: str, *, provider: str, model: str | 
             if model:
                 lines = set_toml_string(lines, "model", model)
             lines = set_toml_string(lines, "preferred_auth_method", "chatgpt")
-        elif section.startswith("[model_providers.") and section != f"[model_providers.{provider}]":
-            lines = remove_toml_key(lines, "experimental_bearer_token")
+        elif section == section_name:
+            found_provider = True
+            lines = set_toml_string(lines, "name", provider)
+            lines = set_toml_string(lines, "wire_api", "responses")
+            lines = set_toml_bool(lines, "requires_openai_auth", True)
+            for key in ("base_url", "env_key", "experimental_bearer_token"):
+                lines = remove_toml_key(lines, key)
+        elif section.startswith("[model_providers."):
+            continue
         updated.append((section, lines))
+    if not found_provider:
+        append_auth_provider_section(updated, provider)
     return render_toml_sections(updated)
 
 
@@ -529,8 +678,98 @@ def rewrite_config_provider_name(text: str, *, old_provider: str, new_provider: 
             if lines:
                 lines[0] = f"{new_section}\n"
             lines = set_toml_string(lines, "name", new_provider)
-            lines = remove_toml_key(lines, "requires_openai_auth")
             lines = remove_toml_key(lines, "experimental_bearer_token")
+        updated.append((section, lines))
+    return render_toml_sections(updated)
+
+
+def provider_section_id(section: str) -> str | None:
+    """Return the provider id for a `[model_providers.<id>...]` header, else None."""
+    prefix = "[model_providers."
+    if section.startswith(prefix) and section.endswith("]"):
+        return section[len(prefix):-1]
+    return None
+
+
+def append_auth_provider_section(sections: list[tuple[str, list[str]]], provider: str) -> None:
+    section_name = f"[model_providers.{provider}]"
+    if sections and sections[-1][1] and sections[-1][1][-1].strip():
+        sections[-1][1].append("\n")
+    sections.append(
+        (
+            section_name,
+            [
+                f"{section_name}\n",
+                f'name = "{escape_toml_string(provider)}"\n',
+                'wire_api = "responses"\n',
+                "requires_openai_auth = true\n",
+            ],
+        )
+    )
+
+
+def normalize_active_provider_config(text: str, *, canonical: str) -> str:
+    """Collapse the active config onto one Codex-valid, stable provider name.
+
+    The provider that `model_provider` points at is treated as the active route.
+    If it carries custom routing (base_url / env_key / experimental_bearer_token)
+    it is renamed to ``canonical`` with all keys preserved; otherwise a
+    ``requires_openai_auth`` provider section is written under the same canonical
+    name. Every other `[model_providers.*]` section is dropped, which also removes
+    the illegal reserved-id sections that make Codex refuse to load the config.
+    """
+    canonical = safe_provider_name(canonical)
+    provider = find_toml_scalar(text, "model_provider") or infer_provider(text)
+    sections = split_toml_sections(text)
+
+    active_index = None
+    is_route = False
+    if provider:
+        for index, (section, lines) in enumerate(sections):
+            section_id = provider_section_id(section)
+            if section_id is not None and section_id.lower() == provider.lower():
+                body = "".join(lines)
+                is_route = any(
+                    find_toml_scalar(body, key)
+                    for key in ("base_url", "env_key", "experimental_bearer_token")
+                )
+                active_index = index
+
+    target_provider = canonical
+    new_header = f"[model_providers.{canonical}]"
+    updated: list[tuple[str, list[str]]] = []
+    wrote_provider_section = False
+    for index, (section, lines) in enumerate(sections):
+        lines = list(lines)
+        if section == "":
+            lines = set_toml_string(lines, "model_provider", target_provider)
+            updated.append((section, lines))
+            continue
+        if provider_section_id(section) is not None:
+            if is_route and index == active_index:
+                if lines:
+                    lines[0] = f"{new_header}\n"
+                lines = set_toml_string(lines, "name", canonical)
+                updated.append((new_header, lines))
+                wrote_provider_section = True
+            # Drop every other provider section (inert customs + illegal reserved).
+            continue
+        updated.append((section, lines))
+    if not is_route or not wrote_provider_section:
+        append_auth_provider_section(updated, canonical)
+    return render_toml_sections(updated)
+
+
+def rewrite_embedded_home_paths(text: str, codex_dir: Path) -> str:
+    sections = split_toml_sections(text)
+    updated: list[tuple[str, list[str]]] = []
+    home = str(codex_dir)
+
+    for section, lines in sections:
+        lines = list(lines)
+        if section.endswith(".env]") or section.endswith(".env\" ]"):
+            lines = set_toml_string(lines, "CODEX_HOME", home)
+            lines = set_toml_string(lines, "NODE_REPL_TRUSTED_CODE_PATHS", home)
         updated.append((section, lines))
     return render_toml_sections(updated)
 
@@ -559,6 +798,18 @@ def find_provider_scalar(text: str, provider: str | None, key: str) -> str | Non
     return None
 
 
+def infer_provider(text: str) -> str | None:
+    provider_sections: list[str] = []
+    for section, _lines in split_toml_sections(text):
+        if section.startswith("[model_providers.") and section.endswith("]"):
+            provider_sections.append(section[len("[model_providers.") : -1])
+    if "OpenAI" in provider_sections:
+        return "OpenAI"
+    if len(provider_sections) == 1:
+        return provider_sections[0]
+    return None
+
+
 def find_toml_section(text: str, provider: str) -> str:
     target = f"[model_providers.{provider}]"
     for section, lines in split_toml_sections(text):
@@ -570,7 +821,9 @@ def find_toml_section(text: str, provider: str) -> str:
 def safe_provider_name(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", name.strip())
     cleaned = cleaned.strip("-_")
-    return cleaned or "custom"
+    if not cleaned or cleaned.lower() in RESERVED_PROVIDER_IDS:
+        return DEFAULT_ACTIVE_PROVIDER
+    return cleaned
 
 
 def validate_profile_name(name: str) -> str:
@@ -587,16 +840,26 @@ def route_matches_active(candidate: ProfileStatus, active: ProfileStatus) -> boo
         return False
     if candidate.base_url or active.base_url:
         return candidate.base_url == active.base_url and candidate.model == active.model
+    if candidate.mode == "auth" and active.mode == "auth":
+        return True
     return candidate.provider == active.provider and candidate.model == active.model
 
 
-def detect_mode(config_text: str, auth: dict) -> str:
-    if "experimental_bearer_token =" in config_text:
-        return "hybrid" if auth.get("tokens") else "api"
-    if 'env_key = "OPENAI_API_KEY"' in config_text or "env_key =" in config_text:
-        return "hybrid" if auth.get("tokens") else "api"
-    if "requires_openai_auth = true" in config_text:
+def detect_mode(config_text: str, auth: dict, provider: str | None = None) -> str:
+    provider_text = find_toml_section(config_text, provider) if provider else ""
+    relevant_text = provider_text or config_text
+    requires_openai_auth = "requires_openai_auth = true" in relevant_text
+    has_route_key = "experimental_bearer_token =" in relevant_text or "env_key =" in relevant_text
+    has_custom_base_url = bool(find_toml_scalar(relevant_text, "base_url")) and (
+        not provider or provider.lower() not in RESERVED_PROVIDER_IDS
+    )
+
+    if requires_openai_auth and (has_route_key or has_custom_base_url):
+        return "hybrid"
+    if requires_openai_auth:
         return "auth"
+    if has_route_key:
+        return "api"
     if auth.get("tokens"):
         return "auth"
     return "unknown"

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .core import ProfileStore
+from .core import DEFAULT_ACTIVE_PROVIDER, DEFAULT_ENV_KEY, ProfileStore
 from .tui import run_tui
 
 
@@ -36,12 +36,13 @@ def main() -> None:
     custom = route_sub.add_parser("custom", help="route model calls through a custom provider")
     custom.add_argument("--base-url", required=True)
     custom.add_argument("--model", required=True)
-    custom.add_argument("--api-key", required=True)
-    custom.add_argument("--provider", default="custom")
+    custom.add_argument("--api-key")
+    custom.add_argument("--env-key", default=DEFAULT_ENV_KEY)
+    custom.add_argument("--provider", default=DEFAULT_ACTIVE_PROVIDER)
     custom.add_argument("--wire-api", default="responses")
     official = route_sub.add_parser("official", help="route model calls back to the official provider")
     official.add_argument("--model")
-    official.add_argument("--provider", default="OpenAI")
+    official.add_argument("--provider", default=DEFAULT_ACTIVE_PROVIDER)
 
     args = parser.parse_args()
     store = ProfileStore(root=args.root, codex_dir=args.codex_dir)
@@ -82,9 +83,11 @@ def main() -> None:
         print("restart Codex Desktop if it is already open")
     elif command == "mix":
         backup = store.mix_profiles(args.auth_profile, args.route_profile)
+        active = store.active_status()
         print(f"mixed auth={args.auth_profile} route={args.route_profile}")
         print("auth.json: from auth profile")
         print("config.toml: from route profile")
+        print(f"route_effect: {mix_effect_message(active)}")
         print(f"backup: {backup}")
         print("restart Codex Desktop if it is already open")
     elif command == "login":
@@ -104,10 +107,11 @@ def main() -> None:
                 base_url=args.base_url,
                 model=args.model,
                 api_key=args.api_key,
+                env_key=None if args.api_key else args.env_key,
                 provider=args.provider,
                 wire_api=args.wire_api,
             )
-            print(f"routed to custom provider: {args.provider}")
+            print(f"routed to custom provider: {store.active_status().provider or args.provider}")
             print(f"model: {args.model}")
             print(f"base_url: {args.base_url}")
             print("auth.json: preserved")
@@ -115,7 +119,7 @@ def main() -> None:
             print("restart Codex Desktop if it is already open")
         elif args.route_command == "official":
             backup = store.route_official(model=args.model, provider=args.provider)
-            print(f"routed to official provider: {args.provider}")
+            print(f"routed to official provider: {store.active_status().provider or args.provider}")
             if args.model:
                 print(f"model: {args.model}")
             print("auth.json: preserved")
@@ -137,6 +141,22 @@ def print_status(status) -> None:
     print(f"  api.config.toml: {'yes' if status.api_config_present else 'no'}")
     print(f"  auth.json: {'yes' if status.auth_present else 'no'}")
     print(f"  auth_mode: {status.auth_mode or '-'}")
+    if status.auth_is_ignored:
+        print("  auth_effect: ignored by API route")
+    elif status.route_uses_auth:
+        print("  auth_effect: used by selected route")
+    elif status.auth_present:
+        print("  auth_effect: present, route usage unknown")
+
+
+def mix_effect_message(status) -> str:
+    if status.auth_is_ignored:
+        return "API credentials are used; copied auth.json is present but ignored by model requests"
+    if status.mode == "hybrid":
+        return "selected auth.json is used with a custom endpoint"
+    if status.mode == "auth":
+        return "selected auth.json is used"
+    return "unknown; run cps status"
 
 
 def print_doc() -> None:
@@ -150,6 +170,11 @@ Core idea:
   Auth profile        -> auth.json / ChatGPT login
   API / Route profile -> config.toml / provider / model / base_url / API key
   Apply Selection     -> writes the selected Auth + API / Route into ~/.codex
+
+Route effect:
+  cps status reports auth_effect so API-key routes are not mistaken for
+  ChatGPT-account routes. If auth_effect is ignored, auth.json is present but
+  model requests use API credentials.
 
 TUI:
   cps
@@ -175,10 +200,13 @@ Common CLI:
   cps restart
 
 Custom API route:
+  cps route custom --base-url URL --model MODEL [--env-key OPENAI_API_KEY]
   cps route custom --base-url URL --model MODEL --api-key KEY
+  # default provider: gateway
 
 Official route:
   cps route official --model MODEL
+  # default provider: gateway
 
 State:
   ~/.codex                 active Codex config
@@ -197,12 +225,13 @@ Release notes:
     - Full-screen menu for creation flows
     - New API Route and New Auth Login forms
     - Apply Selection wording
+    - auth_effect status for API routes that ignore copied auth.json
     - Scroll-aware pages for smaller terminals
     - Safer profile and provider name handling
 
   1.0.3
     - Auth and API / Route columns in the TUI
-    - Hybrid composition with cps mix <auth> <route>
+    - File composition with cps mix <auth> <route>
     - Split init auth / init route / init full commands
     - Route helpers for official and custom API endpoints
     - Codex restart support

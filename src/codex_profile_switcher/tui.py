@@ -5,15 +5,15 @@ import shlex
 import textwrap
 from urllib.parse import urlparse
 
-from .core import ProfileStore, ProfileStatus
+from .core import DEFAULT_ACTIVE_PROVIDER, DEFAULT_ENV_KEY, ProfileStore, ProfileStatus
 
 
 API_FORM_FIELDS = [
     {"key": "name", "label": "Name", "placeholder": "work", "required": True, "secret": False},
     {"key": "base_url", "label": "Base URL", "placeholder": "https://api.example.com/v1", "required": True, "secret": False},
     {"key": "model", "label": "Model", "placeholder": "gpt-5.5", "required": True, "secret": False},
-    {"key": "api_key", "label": "API Key", "placeholder": "sk-...", "required": True, "secret": True},
-    {"key": "provider", "label": "Provider", "placeholder": "defaults to Name", "required": False, "secret": False},
+    {"key": "env_key", "label": "Env Key", "placeholder": DEFAULT_ENV_KEY, "required": False, "secret": False},
+    {"key": "provider", "label": "Provider", "placeholder": DEFAULT_ACTIVE_PROVIDER, "required": False, "secret": False},
     {"key": "wire_api", "label": "Wire API", "placeholder": "responses", "required": False, "secret": False},
 ]
 
@@ -74,7 +74,8 @@ class App:
         self.command = ""
         self.api_form = ApiRouteForm()
         self.auth_form = AuthProfileForm()
-        self.history = ["Tab changes column. Enter selects. * is chosen, > is cursor. a new API, m apply, R restart."]
+        self.history = ["Tab changes column. Enter selects. * is chosen, > is cursor. a new API, m apply, r restart."]
+        self.pending_delete: str | None = None
 
     def run(self) -> None:
         curses.curs_set(0)
@@ -106,6 +107,9 @@ class App:
             if self.mode == "help":
                 self.handle_help_key(key)
                 continue
+            if self.pending_delete:
+                self.handle_delete_confirmation(key)
+                continue
             if key in (curses.KEY_UP,):
                 self.move_selection(-1)
             elif key in (curses.KEY_DOWN,):
@@ -116,19 +120,20 @@ class App:
                 self.submit()
             elif key in (27,):
                 self.command = ""
-            elif key in (curses.KEY_BACKSPACE, 127, 8):
-                self.command = self.command[:-1]
+            elif key in (curses.KEY_BACKSPACE, curses.KEY_DC, 127, 8):
+                if self.command:
+                    self.command = self.command[:-1]
+                else:
+                    self.request_delete_current()
             elif key == ord("?"):
                 self.mode = "help"
-            elif key == ord("q") and not self.command:
+            elif key in (ord("q"), ord("Q")) and not self.command:
                 return
-            elif key == ord("o") and not self.command:
+            elif key in (ord("o"), ord("O")) and not self.command:
                 self.mode = "menu"
-            elif key == ord("r") and not self.command:
-                self.log("Refreshed profile state.")
-            elif key == ord("m") and not self.command:
+            elif key in (ord("m"), ord("M")) and not self.command:
                 self.mix_chosen()
-            elif key == ord("R") and not self.command:
+            elif key in (ord("r"), ord("R")) and not self.command:
                 self.restart_codex()
             elif 32 <= key <= 126:
                 self.command += chr(key)
@@ -167,7 +172,7 @@ class App:
         self.draw_footer(
             height,
             width,
-            "[M] Apply Selection   [O] Menu   [R] Restart Codex   [?] Help   [Q] Quit",
+            "[M] Apply Selection   [Del] Delete   [O] Menu   [R/r] Restart Codex   [?] Help   [Q] Quit",
         )
 
     def draw_logo(self, width: int, height: int) -> int:
@@ -319,7 +324,12 @@ class App:
 
     def draw_footer(self, height: int, width: int, hint: str) -> None:
         y = height - 1
-        text = f" Command: {self.command}" if self.command else f" {hint}"
+        if self.pending_delete:
+            text = f" Delete {self.pending_delete}? Press y to confirm, n/Esc to cancel"
+        elif self.command:
+            text = f" Command: {self.command}"
+        else:
+            text = f" {hint}"
         self.add(y, 0, " " * max(0, width - 1), curses.A_REVERSE)
         self.add(y, 1, text[: max(0, width - 2)], curses.A_REVERSE)
 
@@ -415,11 +425,12 @@ class App:
             "  Tab / Left / Right      switch Auth and API / Route columns",
             "  Up / Down               move cursor in current column",
             "  Enter                   choose the current item",
+            "  Delete                  ask to delete the current item",
             "  O -> New API Route      create an API / Route profile",
             "  O -> New Auth Login     create an auth profile and run codex login",
             "  M                       apply selected Auth + API / Route to ~/.codex",
             "  O                       open the menu",
-            "  R                       restart Codex Desktop",
+            "  R / r                   restart Codex Desktop",
             "",
             "API form",
             "  Enter / Tab             move to the next field",
@@ -444,7 +455,7 @@ class App:
         return "empty" if status.config_empty else "ok"
 
     def auth_state(self, status: ProfileStatus) -> str:
-        if status.mode == "api":
+        if status.auth_is_ignored:
             return "ignored" if status.auth_present else "-"
         if status.mode == "hybrid":
             return "preserved" if status.auth_present else "missing"
@@ -532,6 +543,46 @@ class App:
                 self.route_selected = clamp_index(self.route_selected, candidates)
                 self.chosen_route = candidates[self.route_selected].name
                 self.log(f"Chosen route: {self.chosen_route}")
+
+    def current_profile_name(self) -> str | None:
+        profiles = [self.store.profile_status(name) for name in self.store.list_profiles()]
+        if self.focus == "auth":
+            candidates = auth_candidates(profiles)
+            if not candidates:
+                return None
+            self.auth_selected = clamp_index(self.auth_selected, candidates)
+            return candidates[self.auth_selected].name
+        candidates = route_candidates(profiles)
+        if not candidates:
+            return None
+        self.route_selected = clamp_index(self.route_selected, candidates)
+        return candidates[self.route_selected].name
+
+    def request_delete_current(self) -> None:
+        name = self.current_profile_name()
+        if not name:
+            self.log(f"No {self.focus} profile selected to delete.")
+            return
+        self.pending_delete = name
+        self.log(f"Delete {name}? Press y to confirm, n or Esc to cancel.")
+
+    def handle_delete_confirmation(self, key: int) -> None:
+        name = self.pending_delete
+        if not name:
+            return
+        if key in (ord("y"), ord("Y")):
+            self.pending_delete = None
+            self.delete_profile(name)
+            if self.chosen_auth == name:
+                self.chosen_auth = None
+            if self.chosen_route == name:
+                self.chosen_route = None
+            return
+        if key in (27, ord("n"), ord("N"), ord("q")):
+            self.pending_delete = None
+            self.log(f"Canceled delete {name}.")
+            return
+        self.log(f"Delete {name}? Press y to confirm, n or Esc to cancel.")
 
     def run_command(self, command: str) -> None:
         self.log(f"> {redact_command(command)}")
@@ -710,6 +761,7 @@ class App:
         self.chosen_auth = auth_name
         self.chosen_route = route_name
         self.log(f"Mixed auth={auth_name} route={route_name}.")
+        self.log(mix_effect_message(self.store.active_status()))
         self.log(f"Backup: {backup}")
         self.log("Restart Codex Desktop so it reloads ~/.codex.")
 
@@ -826,14 +878,14 @@ class App:
         if missing:
             self.api_form.error = "Required: " + ", ".join(missing)
             return
-        provider = values["provider"] or values["name"]
+        provider = values["provider"] or DEFAULT_ACTIVE_PROVIDER
         wire_api = values["wire_api"] or "responses"
         try:
             path = self.store.create_route_profile(
                 values["name"],
                 base_url=values["base_url"],
                 model=values["model"],
-                api_key=values["api_key"],
+                env_key=values["env_key"] or DEFAULT_ENV_KEY,
                 provider=provider,
                 wire_api=wire_api,
             )
@@ -866,8 +918,9 @@ class App:
 
     def route(self, args: list[str]) -> None:
         if not args:
-            self.log("Usage: /route custom --base-url URL --model MODEL --api-key KEY")
-            self.log("   or: /route official [--model MODEL] [--provider OpenAI]")
+            self.log("Usage: /route custom --base-url URL --model MODEL [--env-key OPENAI_API_KEY]")
+            self.log("   or: /route custom --base-url URL --model MODEL --api-key KEY")
+            self.log(f"   or: /route official [--model MODEL] [--provider {DEFAULT_ACTIVE_PROVIDER}]")
             return
         mode = args[0].lower()
         try:
@@ -887,16 +940,18 @@ class App:
         base_url = options.get("--base-url")
         model = options.get("--model")
         api_key = options.get("--api-key")
-        if not base_url or not model or not api_key:
-            self.log("Usage: /route custom --base-url URL --model MODEL --api-key KEY")
+        env_key = options.get("--env-key", DEFAULT_ENV_KEY)
+        if not base_url or not model:
+            self.log("Usage: /route custom --base-url URL --model MODEL [--env-key OPENAI_API_KEY]")
             return
-        provider = options.get("--provider", "custom")
+        provider = options.get("--provider", DEFAULT_ACTIVE_PROVIDER)
         wire_api = options.get("--wire-api", "responses")
         try:
             backup = self.store.route_custom(
                 base_url=base_url,
                 model=model,
                 api_key=api_key,
+                env_key=None if api_key else env_key,
                 provider=provider,
                 wire_api=wire_api,
             )
@@ -911,7 +966,7 @@ class App:
 
     def route_official(self, options: dict[str, str]) -> None:
         model = options.get("--model")
-        provider = options.get("--provider", "OpenAI")
+        provider = options.get("--provider", DEFAULT_ACTIVE_PROVIDER)
         try:
             backup = self.store.route_official(model=model, provider=provider)
         except Exception as exc:
@@ -1009,7 +1064,7 @@ def route_candidates(profiles: list[ProfileStatus]) -> list[ProfileStatus]:
     return [
         status
         for status in profiles
-        if status.config_present and not status.config_empty and status.provider
+        if status.config_present and not status.config_empty and (status.provider or status.mode == "auth")
     ]
 
 
@@ -1042,6 +1097,16 @@ def route_detail(status: ProfileStatus) -> str:
     else:
         endpoint = "-"
     return f"{route_type}:{endpoint} {status.model or '-'}"
+
+
+def mix_effect_message(status: ProfileStatus) -> str:
+    if status.auth_is_ignored:
+        return "Route uses API credentials; copied auth.json is present but ignored by model requests."
+    if status.mode == "hybrid":
+        return "Route uses the selected auth.json with a custom endpoint."
+    if status.mode == "auth":
+        return "Route uses the selected auth.json."
+    return "Route auth behavior is unknown; check cps status."
 
 
 def auth_detail(status: ProfileStatus | None) -> str:
