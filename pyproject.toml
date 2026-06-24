@@ -14,7 +14,6 @@ dependencies = []
 [project.scripts]
 codex-profiles = "codex_profile_switcher.cli:main"
 cps = "codex_profile_switcher.cli:main"
-cpx = "codex_profile_switcher.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
