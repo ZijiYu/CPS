@@ -7,7 +7,7 @@
 ║   CPS - Codex Profile Switcher                                 ║
 ╚════════════════════════════════════════════════════════════════╝
 
-Version: 1.0.4
+Version: 1.0.5
 ```
 
 > CPS is a tiny terminal tool for using official Codex auth login with gateway forwarding.

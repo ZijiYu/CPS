@@ -20,7 +20,7 @@
 ║                                                                ║
 ╚════════════════════════════════════════════════════════════════╝
 
-  Version: 1.0.4  |  https://github.com/ZijiYu/codex-profile-switcher
+  Version: 1.0.5  |  https://github.com/ZijiYu/codex-profile-switcher
 ```
 
 CPS는 Codex 설정을 빠르게 전환하기 위한 작은 터미널 도구입니다.

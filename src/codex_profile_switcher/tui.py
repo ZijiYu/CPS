@@ -59,12 +59,12 @@ LOGO = [
     "║                                                                ║",
     "╚════════════════════════════════════════════════════════════════╝",
     "",
-    "  Version: 1.0.4  |  https://github.com/ZijiYu/codex-profile-switcher",
+    "  Version: 1.0.5  |  https://github.com/ZijiYu/codex-profile-switcher",
 ]
 
 COMPACT_LOGO = [
     "CPS - Codex Profile Switcher",
-    "Version: 1.0.4 | https://github.com/ZijiYu/codex-profile-switcher",
+    "Version: 1.0.5 | https://github.com/ZijiYu/codex-profile-switcher",
 ]
 
 MEDIUM_LOGO = [

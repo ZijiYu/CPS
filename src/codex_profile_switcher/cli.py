@@ -234,6 +234,9 @@ Safety:
     cps restore <deleted-profile>
 
 Release notes:
+  1.0.5
+    - Version bump for the gateway workflow safety release
+
   1.0.4
     - Full-screen menu for creation flows
     - New Gateway Route and New Auth Login forms
