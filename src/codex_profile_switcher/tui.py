@@ -22,11 +22,23 @@ AUTH_FORM_FIELDS = [
     {"key": "name", "label": "Name", "placeholder": "personal", "required": True, "secret": False},
 ]
 
+STYLE_NORMAL = curses.A_NORMAL
+STYLE_BAR = curses.A_BOLD
+STYLE_FOCUS = curses.A_BOLD | curses.A_UNDERLINE
+STYLE_PANEL = curses.A_BOLD
+STYLE_INPUT = curses.A_BOLD | curses.A_UNDERLINE
+STYLE_ERROR = curses.A_BOLD | curses.A_UNDERLINE
+TRUE_BLACK_BACKGROUND = "\033]10;#ffffff\007\033]11;#000000\007\033[38;2;255;255;255m\033[48;2;0;0;0m"
+TIER_COMPACT = "compact"
+TIER_NORMAL = "normal"
+TIER_SPACIOUS = "spacious"
+
 
 MENU_ITEMS = [
-    ("New API Route", "Create a route-only profile with a form", "new_api"),
+    ("New Gateway Route", "Create a gateway forwarding profile", "new_api"),
     ("New Auth Login", "Create an auth profile and run codex login", "new_auth"),
     ("Show Status", "Show active and saved profile state", "status"),
+    ("Run Doctor", "Diagnose active config and saved profiles", "doctor"),
     ("Restart Codex", "Quit and reopen Codex Desktop", "restart"),
     ("Help", "Open the full help page", "help"),
     ("Back", "Return to the main selector", "back"),
@@ -55,9 +67,37 @@ COMPACT_LOGO = [
     "Version: 1.0.4 | https://github.com/ZijiYu/codex-profile-switcher",
 ]
 
+MEDIUM_LOGO = [
+    "╔════════════════════════════════════════════════════════════════╗",
+    "║   ██████╗ ██████╗ ███████╗                                    ║",
+    "║   Codex Profile Switcher                                      ║",
+    "╚════════════════════════════════════════════════════════════════╝",
+]
+
 
 def run_tui(store: ProfileStore) -> None:
     curses.wrapper(lambda screen: App(screen, store).run())
+
+
+def init_terminal_style(screen) -> None:
+    global STYLE_NORMAL, STYLE_BAR, STYLE_FOCUS, STYLE_PANEL, STYLE_INPUT, STYLE_ERROR
+    try:
+        print(TRUE_BLACK_BACKGROUND, end="", flush=True)
+        if curses.has_colors():
+            curses.start_color()
+            curses.use_default_colors()
+            curses.init_pair(1, curses.COLOR_WHITE, -1)
+            curses.init_pair(2, curses.COLOR_CYAN, -1)
+            curses.init_pair(3, curses.COLOR_RED, -1)
+            STYLE_NORMAL = curses.color_pair(1)
+            STYLE_BAR = curses.color_pair(1) | curses.A_BOLD
+            STYLE_FOCUS = curses.color_pair(2) | curses.A_BOLD | curses.A_UNDERLINE
+            STYLE_PANEL = curses.color_pair(1) | curses.A_BOLD
+            STYLE_INPUT = curses.color_pair(2) | curses.A_BOLD | curses.A_UNDERLINE
+            STYLE_ERROR = curses.color_pair(3) | curses.A_BOLD | curses.A_UNDERLINE
+            screen.bkgd(" ", STYLE_NORMAL)
+    except curses.error:
+        pass
 
 
 class App:
@@ -74,12 +114,14 @@ class App:
         self.command = ""
         self.api_form = ApiRouteForm()
         self.auth_form = AuthProfileForm()
-        self.history = ["Tab changes column. Enter selects. * is chosen, > is cursor. a new API, m apply, r restart."]
+        self.history = ["Tab changes column. Space selects draft. Enter reviews the draft before applying."]
         self.pending_delete: str | None = None
+        self.pending_apply: tuple[str, str] | None = None
 
     def run(self) -> None:
         curses.curs_set(0)
         self.screen.keypad(True)
+        init_terminal_style(self.screen)
         try:
             curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
             curses.mouseinterval(0)
@@ -107,6 +149,9 @@ class App:
             if self.mode == "help":
                 self.handle_help_key(key)
                 continue
+            if self.pending_apply:
+                self.handle_apply_confirmation(key)
+                continue
             if self.pending_delete:
                 self.handle_delete_confirmation(key)
                 continue
@@ -118,21 +163,21 @@ class App:
                 self.toggle_focus()
             elif key in (10, 13, curses.KEY_ENTER):
                 self.submit()
+            elif key == ord(" ") and not self.command:
+                self.choose_current()
             elif key in (27,):
                 self.command = ""
             elif key in (curses.KEY_BACKSPACE, curses.KEY_DC, 127, 8):
                 if self.command:
                     self.command = self.command[:-1]
-                else:
-                    self.request_delete_current()
+            elif key in (ord("d"), ord("D")) and not self.command:
+                self.request_delete_current()
             elif key == ord("?"):
                 self.mode = "help"
             elif key in (ord("q"), ord("Q")) and not self.command:
                 return
             elif key in (ord("o"), ord("O")) and not self.command:
                 self.mode = "menu"
-            elif key in (ord("m"), ord("M")) and not self.command:
-                self.mix_chosen()
             elif key in (ord("r"), ord("R")) and not self.command:
                 self.restart_codex()
             elif 32 <= key <= 126:
@@ -157,31 +202,44 @@ class App:
         active = self.store.active_status()
         profiles = [self.store.profile_status(name) for name in self.store.list_profiles()]
         deleted = self.store.list_deleted()
-        logo_height = self.draw_logo(width, height)
-        top = logo_height + 1
+        active_auth, active_route = self.active_mix()
+        tier = layout_tier(height, width)
+        logo_height = self.draw_logo(width, height, tier)
+        top = logo_height + (1 if logo_height else 0)
 
-        self.draw_header(top, width, active)
+        self.draw_header(top, width, active, active_auth, active_route)
         content_top = top + 3
         left_col = 2
-        gap = 4
-        left_width = max(34, min(58, width - left_col - gap - 34))
+        gap = 4 if tier != TIER_COMPACT else 2
+        if tier == TIER_COMPACT:
+            left_width = max(34, width - left_col - 2)
+        elif width >= 104:
+            left_width = min(86, max(60, width - left_col - gap - 34))
+        else:
+            left_width = max(34, width - left_col - 2)
         activity_col = left_col + left_width + gap
-        self.draw_sidebar(content_top, left_col, left_width, height, profiles, deleted)
-        if activity_col < width - 20:
+        self.draw_sidebar(content_top, left_col, left_width, height, profiles, deleted, active_auth, active_route, tier)
+        if tier != TIER_COMPACT and activity_col < width - 20:
             self.draw_activity(content_top, activity_col, height, width)
         self.draw_footer(
             height,
             width,
-            "[M] Apply Selection   [Del] Delete   [O] Menu   [R/r] Restart Codex   [?] Help   [Q] Quit",
+            main_footer_hint(width, tier),
         )
+        if self.pending_apply:
+            self.draw_apply_confirmation_panel(height, width)
+        elif self.pending_delete:
+            self.draw_delete_confirmation_panel(height, width)
 
-    def draw_logo(self, width: int, height: int) -> int:
-        if height < 30:
-            lines = COMPACT_LOGO[:1]
-        elif width >= 70:
+    def draw_logo(self, width: int, height: int, tier: str) -> int:
+        if tier == TIER_COMPACT:
+            lines = [] if height < 26 else COMPACT_LOGO[:1]
+        elif tier == TIER_SPACIOUS and width >= 70:
             lines = LOGO
+        elif height >= 34 and width >= 70:
+            lines = MEDIUM_LOGO
         else:
-            lines = COMPACT_LOGO
+            lines = COMPACT_LOGO[:1]
 
         for y, line in enumerate(lines):
             if y >= height - 6:
@@ -191,11 +249,22 @@ class App:
             self.add(y, x, line, attr)
         return min(len(lines), max(0, height - 6))
 
-    def draw_header(self, row: int, width: int, active: ProfileStatus) -> None:
-        self.add(row, 0, " " * max(0, width - 1), curses.A_REVERSE)
-        label = f" Codex Profile Switcher  active={active.mode}  model={active.model or '-'} "
-        self.add(row, 1, label[: max(0, width - 2)], curses.A_REVERSE | curses.A_BOLD)
-        self.add(row + 1, 2, "Saved profiles live in ~/.codex-profiles. Active Desktop config lives in ~/.codex.")
+    def draw_header(
+        self,
+        row: int,
+        width: int,
+        active: ProfileStatus,
+        active_auth: str | None,
+        active_route: str | None,
+    ) -> None:
+        status = self.draft_status_label(active_auth, active_route)
+        self.add(row, 0, " " * max(0, width - 1), STYLE_BAR)
+        label = f" Codex Profile Switcher  active={active.mode} "
+        status_col = max(1, width - len(status) - 3)
+        self.add(row, 1, label[: max(0, status_col - 2)], STYLE_BAR)
+        self.add(row, status_col, status[: max(0, width - status_col - 1)], STYLE_BAR)
+        active_text = f"Active: auth={active_auth or '-'}  gateway={active_route or '-'}  model={active.model or '-'}"
+        self.add(row + 1, 2, active_text[: max(0, width - 4)], curses.A_DIM)
 
     def draw_sidebar(
         self,
@@ -205,26 +274,41 @@ class App:
         height: int,
         profiles: list[ProfileStatus],
         deleted: list[str],
+        active_auth: str | None,
+        active_route: str | None,
+        tier: str,
     ) -> None:
-        next_row = self.draw_mix_columns(row, col, panel_width, profiles)
-        deleted_row = min(next_row + 1, max(row, height - 9))
-        self.draw_deleted(deleted_row, col, panel_width, height, deleted)
+        next_row = self.draw_mix_columns(row, col, panel_width, height, profiles, active_auth, active_route, tier)
+        self.draw_deleted(next_row + 1, col, panel_width, height, deleted)
 
-    def draw_mix_columns(self, row: int, col: int, panel_width: int, profiles: list[ProfileStatus]) -> int:
+    def draw_mix_columns(
+        self,
+        row: int,
+        col: int,
+        panel_width: int,
+        height: int,
+        profiles: list[ProfileStatus],
+        active_auth: str | None,
+        active_route: str | None,
+        tier: str,
+    ) -> int:
         self.add(
             row,
             col,
-            "Auth",
-            curses.A_BOLD | (curses.A_REVERSE if self.focus == "auth" else curses.A_NORMAL),
+            focus_title("Auth", self.focus == "auth"),
+            STYLE_FOCUS if self.focus == "auth" else curses.A_BOLD,
         )
-        auth_width = max(16, min(26, panel_width // 2 - 1))
-        route_width = max(16, panel_width - auth_width - 3)
-        route_col = col + auth_width + 2
+        compact = tier == TIER_COMPACT
+        item_height = 1 if compact else 2
+        auth_width = max(18 if compact else 24, min(30 if compact else 34, panel_width // 2 - 2))
+        gap = 3
+        route_width = max(22 if compact else 28, panel_width - auth_width - gap)
+        route_col = col + auth_width + gap
         self.add(
             row,
             route_col,
-            "API / Route",
-            curses.A_BOLD | (curses.A_REVERSE if self.focus == "route" else curses.A_NORMAL),
+            focus_title("Gateway", self.focus == "route"),
+            STYLE_FOCUS if self.focus == "route" else curses.A_BOLD,
         )
         if not profiles:
             self.add(row + 2, col, "No profiles yet. Type /init work.")
@@ -240,32 +324,51 @@ class App:
             self.chosen_route = route_profiles[self.route_selected].name
 
         max_items = max(len(auth_profiles), len(route_profiles), 1)
+        preview_rows = 6 if compact else 9
+        available_rows = max(1, height - row - preview_rows - 5)
+        visible_items = max(1, min(max_items, available_rows // item_height))
+        auth_start = scroll_start(self.auth_selected, visible_items, len(auth_profiles))
+        route_start = scroll_start(self.route_selected, visible_items, len(route_profiles))
         y = row + 2
-        for i in range(max_items):
-            if i < len(auth_profiles):
+        for i in range(visible_items):
+            auth_index = auth_start + i
+            route_index = route_start + i
+            if auth_index < len(auth_profiles):
+                status = auth_profiles[auth_index]
                 self.draw_mix_item(
-                    y + i,
+                    y + i * item_height,
                     col,
                     auth_width,
-                    auth_profiles[i],
+                    status,
                     kind="auth",
-                    cursor=self.focus == "auth" and i == self.auth_selected,
-                    chosen=auth_profiles[i].name == self.chosen_auth,
+                    cursor=self.focus == "auth" and auth_index == self.auth_selected,
+                    chosen=status.name == self.chosen_auth,
+                    active=status.name == active_auth,
+                    compact=compact,
                 )
-            if i < len(route_profiles):
+            if route_index < len(route_profiles):
+                status = route_profiles[route_index]
                 self.draw_mix_item(
-                    y + i,
+                    y + i * item_height,
                     route_col,
                     route_width,
-                    route_profiles[i],
+                    status,
                     kind="route",
-                    cursor=self.focus == "route" and i == self.route_selected,
-                    chosen=route_profiles[i].name == self.chosen_route,
+                    cursor=self.focus == "route" and route_index == self.route_selected,
+                    chosen=status.name == self.chosen_route,
+                    active=status.name == active_route,
+                    compact=compact,
                 )
 
-        summary_row = y + max_items + 1
-        self.draw_mix_preview(summary_row, col, panel_width, profiles)
-        return summary_row + 5
+        more_row = y + visible_items * item_height
+        if auth_start + visible_items < len(auth_profiles):
+            self.add(more_row, col, f"... +{len(auth_profiles) - auth_start - visible_items} more"[:auth_width], curses.A_DIM)
+        if route_start + visible_items < len(route_profiles):
+            self.add(more_row, route_col, f"... +{len(route_profiles) - route_start - visible_items} more"[:route_width], curses.A_DIM)
+
+        summary_row = more_row + (1 if compact else 2)
+        self.draw_mix_preview(summary_row, col, panel_width, profiles, tier)
+        return summary_row + preview_rows
 
     def draw_mix_item(
         self,
@@ -277,22 +380,50 @@ class App:
         kind: str,
         cursor: bool,
         chosen: bool,
+        active: bool,
+        compact: bool = False,
     ) -> None:
         pointer = ">" if cursor else " "
         star = "*" if chosen else " "
-        detail = auth_detail(status) if kind == "auth" else route_detail(status)
-        text = f"{pointer}{star} {status.name}  {detail}"
-        attr = curses.A_REVERSE if cursor else curses.A_NORMAL
+        badge = item_badge(status, kind, active)
+        detail = item_detail(status, kind)
+        if compact:
+            text = f"{pointer}{star} {status.name:<12} {badge:<8} {detail}"
+        else:
+            text = f"{pointer}{star} {status.name:<14} {badge}"
+        attr = STYLE_FOCUS if cursor else curses.A_BOLD if chosen else curses.A_NORMAL
         self.add(row, col, text.ljust(width)[:width], attr)
+        if not compact:
+            self.add(row + 1, col + 4, detail[: max(0, width - 4)], curses.A_DIM)
 
-    def draw_mix_preview(self, row: int, col: int, panel_width: int, profiles: list[ProfileStatus]) -> None:
+    def draw_mix_preview(self, row: int, col: int, panel_width: int, profiles: list[ProfileStatus], tier: str) -> None:
         by_name = {status.name: status for status in profiles}
         auth = by_name.get(self.chosen_auth or "")
         route = by_name.get(self.chosen_route or "")
-        self.add(row, col, "Selected structure:", curses.A_BOLD)
-        self.add(row + 1, col, f"auth.json      <- {self.chosen_auth or '-'} ({auth_detail(auth) if auth else '-'})"[:panel_width])
-        self.add(row + 2, col, f"config.toml    <- {self.chosen_route or '-'} ({route_detail(route) if route else '-'})"[:panel_width])
-        self.add(row + 3, col, "[M] Apply Selection   [O] Menu"[:panel_width], curses.A_DIM)
+        compact = tier == TIER_COMPACT
+        self.add(row, col, "Apply preview", curses.A_BOLD)
+        self.add(row + 1, col, rule(panel_width), curses.A_DIM)
+        self.add(row + 2, col + 2, f"auth.json      <- {self.chosen_auth or '-'} ({auth_detail(auth) if auth else '-'})"[: max(0, panel_width - 2)])
+        self.add(row + 3, col + 2, f"config.toml    <- {self.chosen_route or '-'} ({route_detail(route) if route else '-'})"[: max(0, panel_width - 2)])
+        if compact:
+            if self.selection_needs_apply():
+                self.add(row + 4, col + 2, "Enter: review/apply   Space: draft"[: max(0, panel_width - 2)], curses.A_BOLD)
+            else:
+                self.add(row + 4, col + 2, "No changes pending"[: max(0, panel_width - 2)], curses.A_BOLD)
+            return
+        self.add(
+            row + 4,
+            col + 2,
+            f"request path   -> {route_effect_label(route, has_auth=bool(self.chosen_auth))}"[: max(0, panel_width - 2)],
+        )
+        if self.selection_needs_apply():
+            hint = "Enter: review and confirm before writing"
+            hint_attr = curses.A_BOLD
+        else:
+            hint = "No changes pending"
+            hint_attr = curses.A_BOLD
+        self.add(row + 6, col + 2, hint[: max(0, panel_width - 2)], hint_attr)
+        self.add(row + 7, col + 2, "Space: change draft only   O: menu"[: max(0, panel_width - 2)], curses.A_DIM)
 
     def draw_deleted(self, row: int, col: int, panel_width: int, height: int, deleted: list[str]) -> None:
         if row >= height - 4:
@@ -312,30 +443,69 @@ class App:
         available_width = max(20, width - col - 2)
         bottom = height - 3
         self.add(row, col, "Activity", curses.A_BOLD)
-        lines: list[str] = []
-        lines.extend(self.history[-80:])
-
-        wrapped: list[str] = []
-        for line in lines:
-            wrapped.extend(textwrap.wrap(line, available_width) or [""])
-        visible = wrapped[-max(1, bottom - row - 2) :]
-        for i, line in enumerate(visible):
-            self.add(row + 2 + i, col, line)
+        self.add(row + 1, col, rule(available_width, max_width=36), curses.A_DIM)
+        visible = render_history(self.history, available_width)[-max(1, bottom - row - 2) :]
+        for i, (level, message) in enumerate(visible):
+            y = row + 2 + i
+            if level:
+                self.add(y, col, f"{level:<5}", level_attr(level))
+                self.add(y, col + 6, message[: max(0, available_width - 6)])
+            else:
+                self.add(y, col + 6, message[: max(0, available_width - 6)])
 
     def draw_footer(self, height: int, width: int, hint: str) -> None:
         y = height - 1
-        if self.pending_delete:
+        if self.pending_apply:
+            auth_name, route_name = self.pending_apply
+            text = f" Apply auth={auth_name} gateway={route_name}? Press y to confirm, n/Esc to cancel"
+        elif self.pending_delete:
             text = f" Delete {self.pending_delete}? Press y to confirm, n/Esc to cancel"
         elif self.command:
             text = f" Command: {self.command}"
         else:
             text = f" {hint}"
-        self.add(y, 0, " " * max(0, width - 1), curses.A_REVERSE)
-        self.add(y, 1, text[: max(0, width - 2)], curses.A_REVERSE)
+        self.add(y, 0, " " * max(0, width - 1), STYLE_BAR)
+        self.add(y, 2, text[: max(0, width - 4)], STYLE_BAR)
+
+    def draw_apply_confirmation_panel(self, height: int, width: int) -> None:
+        if height < 14 or width < 52:
+            return
+        auth_name, route_name = self.pending_apply or ("-", "-")
+        panel_width = min(76, width - 8)
+        panel_height = 9
+        top = max(2, (height - panel_height) // 2)
+        left = max(2, (width - panel_width) // 2)
+        self.panel(top, left, panel_width, panel_height, "Review apply")
+        self.add(top + 2, left + 3, "This is the only step that writes active config.", curses.A_BOLD)
+        self.add(top + 4, left + 5, f"auth.json   <- {auth_name}"[: max(0, panel_width - 8)])
+        self.add(top + 5, left + 5, f"config.toml <- {route_name}"[: max(0, panel_width - 8)])
+        self.add(top + 7, left + 3, "Y confirm   N/Esc cancel", STYLE_FOCUS)
+
+    def draw_delete_confirmation_panel(self, height: int, width: int) -> None:
+        if height < 12 or width < 48:
+            return
+        name = self.pending_delete or "-"
+        panel_width = min(70, width - 8)
+        panel_height = 7
+        top = max(2, (height - panel_height) // 2)
+        left = max(2, (width - panel_width) // 2)
+        self.panel(top, left, panel_width, panel_height, "Review delete")
+        self.add(top + 2, left + 3, f"Move {name} to ~/.codex-profiles/deleted."[: max(0, panel_width - 6)], curses.A_BOLD)
+        self.add(top + 4, left + 3, "Y confirm   N/Esc cancel", STYLE_FOCUS)
+
+    def panel(self, row: int, col: int, width: int, height: int, title: str) -> None:
+        top = "╭" + "─" * (width - 2) + "╮"
+        mid = "│" + " " * (width - 2) + "│"
+        bottom = "╰" + "─" * (width - 2) + "╯"
+        self.add(row, col, top, STYLE_PANEL)
+        for y in range(row + 1, row + height - 1):
+            self.add(y, col, mid, STYLE_PANEL)
+        self.add(row + height - 1, col, bottom, STYLE_PANEL)
+        self.add(row, col + 2, f" {title} ", STYLE_PANEL)
 
     def draw_page_title(self, height: int, width: int, title: str, subtitle: str = "") -> int:
-        self.add(0, 0, " " * max(0, width - 1), curses.A_REVERSE)
-        self.add(0, 1, f" {title} "[: max(0, width - 2)], curses.A_REVERSE | curses.A_BOLD)
+        self.add(0, 0, " " * max(0, width - 1), STYLE_BAR)
+        self.add(0, 1, f" {title} "[: max(0, width - 2)], STYLE_BAR)
         if subtitle:
             self.add(2, 4, subtitle[: max(0, width - 8)])
         return 4 if subtitle else 2
@@ -344,8 +514,8 @@ class App:
         top = self.draw_page_title(
             height,
             width,
-            "New API / Route",
-            "Create a route-only profile. It will not copy auth.json.",
+            "New Gateway Route",
+            "Create a gateway forwarding profile. Auth is added from the selected login.",
         )
         left = max(2, min(8, width // 10))
         form_width = max(30, min(88, width - left - 4))
@@ -366,7 +536,7 @@ class App:
                 shown = field["placeholder"]
                 attr = curses.A_DIM
             else:
-                attr = curses.A_REVERSE if focused else curses.A_NORMAL
+                attr = STYLE_INPUT if focused else curses.A_NORMAL
             pointer = ">" if focused else " "
             self.add(y, left, f"{pointer} {label}".ljust(label_width), curses.A_BOLD if focused else curses.A_NORMAL)
             self.add(y, value_col, shown.ljust(value_width)[:value_width], attr)
@@ -391,7 +561,7 @@ class App:
         field = AUTH_FORM_FIELDS[0]
         value = self.auth_form.values[field["key"]]
         shown = value or field["placeholder"]
-        attr = curses.A_REVERSE if value else curses.A_DIM
+        attr = STYLE_INPUT if value else curses.A_DIM
         self.add(top, left, "> Name".ljust(12), curses.A_BOLD)
         self.add(top, left + 16, shown.ljust(form_width - 16)[: max(8, form_width - 16)], attr)
 
@@ -408,7 +578,7 @@ class App:
         for index, (label, description, _action) in enumerate(MENU_ITEMS):
             selected = index == self.menu_selected
             pointer = ">" if selected else " "
-            content_rows.append((f"{pointer} {label}".ljust(item_width)[:item_width], curses.A_REVERSE if selected else curses.A_NORMAL))
+            content_rows.append((f"{pointer} {label}".ljust(item_width)[:item_width], STYLE_FOCUS if selected else curses.A_NORMAL))
             content_rows.append(("  " + description[: max(0, item_width - 2)], curses.A_DIM))
         visible_rows = max(1, height - top - 1)
         selected_row = self.menu_selected * 2
@@ -422,24 +592,24 @@ class App:
         left = max(2, min(8, width // 10))
         lines = [
             "Main selector",
-            "  Tab / Left / Right      switch Auth and API / Route columns",
+            "  Tab / Left / Right      switch Auth and Gateway columns",
             "  Up / Down               move cursor in current column",
-            "  Enter                   choose the current item",
-            "  Delete                  ask to delete the current item",
-            "  O -> New API Route      create an API / Route profile",
+            "  Space                   choose the current item as draft only",
+            "  Enter                   review and apply the selected Auth + Gateway draft",
+            "  D                       ask to delete the current item",
+            "  O -> New Gateway Route  create a gateway forwarding profile",
             "  O -> New Auth Login     create an auth profile and run codex login",
-            "  M                       apply selected Auth + API / Route to ~/.codex",
             "  O                       open the menu",
             "  R / r                   restart Codex Desktop",
             "",
             "API form",
             "  Enter / Tab             move to the next field",
-            "  Enter on last field     save the route-only profile",
+            "  Enter on last field     save the gateway route and stage it as draft",
             "  Esc                     cancel and return to main",
             "",
             "Advanced commands",
             "  Slash commands are still available from the main page for power users.",
-            "  Examples: /status, /mix <auth> <route>, /api new, /route official",
+            "  Examples: /status, /doctor, /mix <auth> <route>, /api new, /route official",
         ]
         visible_rows = max(1, height - top - 1)
         self.help_scroll = max(0, min(self.help_scroll, max(0, len(lines) - visible_rows)))
@@ -465,9 +635,22 @@ class App:
 
     def add(self, y: int, x: int, text: str, attr: int = curses.A_NORMAL) -> None:
         height, width = self.screen.getmaxyx()
-        if y < 0 or y >= height or x >= width:
+        if y < 0 or y >= height or x < 0 or x >= width:
             return
         self.screen.addstr(y, x, text[: max(0, width - x - 1)], attr)
+
+    def active_mix(self) -> tuple[str | None, str | None]:
+        try:
+            return self.store.infer_active_mix()
+        except Exception:
+            return None, None
+
+    def draft_status_label(self, active_auth: str | None, active_route: str | None) -> str:
+        if not self.chosen_auth or not self.chosen_route:
+            return "incomplete draft"
+        if (active_auth, active_route) == (self.chosen_auth, self.chosen_route):
+            return "draft matches active"
+        return "pending draft"
 
     def handle_mouse(self) -> None:
         try:
@@ -527,7 +710,7 @@ class App:
         if command:
             self.run_command(command)
             return
-        self.choose_current()
+        self.request_apply_selection()
 
     def choose_current(self) -> None:
         profiles = [self.store.profile_status(name) for name in self.store.list_profiles()]
@@ -536,13 +719,13 @@ class App:
             if candidates:
                 self.auth_selected = clamp_index(self.auth_selected, candidates)
                 self.chosen_auth = candidates[self.auth_selected].name
-                self.log(f"Chosen auth: {self.chosen_auth}")
+                self.log(f"Draft auth login: {self.chosen_auth}. Press Enter to review/apply.")
         else:
             candidates = route_candidates(profiles)
             if candidates:
                 self.route_selected = clamp_index(self.route_selected, candidates)
                 self.chosen_route = candidates[self.route_selected].name
-                self.log(f"Chosen route: {self.chosen_route}")
+                self.log(f"Draft gateway route: {self.chosen_route}. Press Enter to review/apply.")
 
     def current_profile_name(self) -> str | None:
         profiles = [self.store.profile_status(name) for name in self.store.list_profiles()]
@@ -584,6 +767,45 @@ class App:
             return
         self.log(f"Delete {name}? Press y to confirm, n or Esc to cancel.")
 
+    def request_apply_selection(self) -> None:
+        if not self.chosen_auth or not self.chosen_route:
+            if self.chosen_auth:
+                self.log("Draft auth selected. Choose a gateway route with Space before applying.")
+            elif self.chosen_route:
+                self.log("Draft gateway selected. Choose an auth login with Space before applying.")
+            else:
+                self.log("Choose one auth login and one gateway route with Space before applying.")
+            return
+        if not self.selection_needs_apply():
+            self.log(f"Active config already uses auth={self.chosen_auth} gateway={self.chosen_route}.")
+            return
+        self.pending_apply = (self.chosen_auth, self.chosen_route)
+        self.log(f"Apply auth={self.chosen_auth} gateway={self.chosen_route}? Press y to confirm, n or Esc to cancel.")
+
+    def selection_needs_apply(self) -> bool:
+        if not self.chosen_auth or not self.chosen_route:
+            return False
+        try:
+            current_auth, current_route = self.store.infer_active_mix()
+        except Exception:
+            return True
+        return (current_auth, current_route) != (self.chosen_auth, self.chosen_route)
+
+    def handle_apply_confirmation(self, key: int) -> None:
+        pending = self.pending_apply
+        if not pending:
+            return
+        auth_name, route_name = pending
+        if key in (ord("y"), ord("Y")):
+            self.pending_apply = None
+            self.mix_profiles(auth_name, route_name)
+            return
+        if key in (27, ord("n"), ord("N"), ord("q")):
+            self.pending_apply = None
+            self.log(f"Canceled apply auth={auth_name} gateway={route_name}.")
+            return
+        self.log(f"Apply auth={auth_name} gateway={route_name}? Press y to confirm, n or Esc to cancel.")
+
     def run_command(self, command: str) -> None:
         self.log(f"> {redact_command(command)}")
         try:
@@ -602,6 +824,9 @@ class App:
             return
         if name in {"/status", "status"}:
             self.log_status()
+            return
+        if name in {"/doctor", "doctor"}:
+            self.log_doctor()
             return
         if name in {"/list", "list"}:
             profiles = ", ".join(self.store.list_profiles()) or "none"
@@ -681,6 +906,9 @@ class App:
         self.screen.refresh()
         code = self.store.login_profile(name)
         self.log(f"codex login {name} exited with {code}.")
+        if code == 0 and self.store.profile_status(name).auth_present:
+            self.chosen_auth = name
+            self.log(f"Draft auth login: {name}. Press Enter to review/apply.")
 
     def save_profile(self, name: str) -> None:
         try:
@@ -715,6 +943,9 @@ class App:
                 self.log(f"Init failed: {exc}")
                 return
             self.log(f"Initialized auth profile {profile}; codex login exited with {code}.")
+            if code == 0 and self.store.profile_status(profile).auth_present:
+                self.chosen_auth = profile
+                self.log(f"Draft auth login: {profile}. Press Enter to review/apply.")
             return
         try:
             if kind == "route":
@@ -728,6 +959,9 @@ class App:
             self.log(f"Init failed: {exc}")
             return
         self.log(f"Initialized {kind} profile at {path}.")
+        if kind == "route":
+            self.chosen_route = profile
+            self.log(f"Draft gateway route: {profile}. Press Enter to review/apply.")
 
     def delete_profile(self, name: str) -> None:
         try:
@@ -746,12 +980,6 @@ class App:
             return
         self.log(f"Restored profile to {path}.")
 
-    def mix_chosen(self) -> None:
-        if not self.chosen_auth or not self.chosen_route:
-            self.log("Choose one auth and one route first.")
-            return
-        self.mix_profiles(self.chosen_auth, self.chosen_route)
-
     def mix_profiles(self, auth_name: str, route_name: str) -> None:
         try:
             backup = self.store.mix_profiles(auth_name, route_name)
@@ -760,7 +988,7 @@ class App:
             return
         self.chosen_auth = auth_name
         self.chosen_route = route_name
-        self.log(f"Mixed auth={auth_name} route={route_name}.")
+        self.log(f"Applied auth={auth_name} gateway={route_name}.")
         self.log(mix_effect_message(self.store.active_status()))
         self.log(f"Backup: {backup}")
         self.log("Restart Codex Desktop so it reloads ~/.codex.")
@@ -825,6 +1053,10 @@ class App:
             self.mode = "main"
             self.log_status()
             return
+        if action == "doctor":
+            self.mode = "main"
+            self.log_doctor()
+            return
         if action == "restart":
             self.mode = "main"
             self.restart_codex()
@@ -838,7 +1070,7 @@ class App:
     def handle_api_form_key(self, key: int) -> None:
         if key in (27,):
             self.mode = "main"
-            self.log("Canceled new API route.")
+            self.log("Canceled new gateway route.")
             return
         if key in (curses.KEY_UP,):
             self.api_form.move(-1)
@@ -894,9 +1126,9 @@ class App:
             return
         self.chosen_route = values["name"]
         self.mode = "main"
-        self.log(f"Created API route profile {values['name']}.")
+        self.log(f"Created gateway route profile {values['name']}.")
         self.log(f"Path: {path}")
-        self.log("Select an Auth profile, then press m to apply the selection.")
+        self.log(f"Draft gateway route: {values['name']}. Press Enter to review/apply.")
 
     def save_auth_form(self) -> None:
         values = self.auth_form.cleaned_values()
@@ -914,7 +1146,10 @@ class App:
         self.chosen_auth = name
         self.mode = "main"
         self.log(f"Initialized auth profile {name}; codex login exited with {code}.")
-        self.log("Select an API / Route profile, then press m to apply the selection.")
+        if code == 0 and self.store.profile_status(name).auth_present:
+            self.log(f"Draft auth login: {name}. Press Enter to review/apply.")
+        else:
+            self.log("Auth login was not completed, so no gateway route was applied.")
 
     def route(self, args: list[str]) -> None:
         if not args:
@@ -984,9 +1219,22 @@ class App:
         statuses.extend(self.store.profile_status(name) for name in self.store.list_profiles())
         for status in statuses:
             self.log(
-                f"{status.name}: {status.mode}, model={status.model or '-'}, "
+                f"{status.name}: {status.mode}, kind={status.profile_kind or '-'}, model={status.model or '-'}, "
                 f"config={self.config_state(status)}, auth={self.auth_state(status)}"
             )
+
+    def log_doctor(self) -> None:
+        try:
+            diagnostics = self.store.diagnose()
+        except Exception as exc:
+            self.log(f"Doctor failed: {exc}")
+            return
+        if not diagnostics:
+            self.log("Doctor: ok")
+            return
+        self.log(f"Doctor: {len(diagnostics)} finding(s)")
+        for item in diagnostics:
+            self.log(f"{item.level}: {item.subject}: {item.message}")
 
     def log(self, message: str) -> None:
         self.history.append(message)
@@ -1083,6 +1331,116 @@ def clamp_scroll(index: int, visible_rows: int, total_rows: int) -> int:
     if index >= visible_rows:
         return min(max_scroll, index - visible_rows + 1)
     return 0
+
+
+def layout_tier(height: int, width: int) -> str:
+    if height < 30 or width < 100:
+        return TIER_COMPACT
+    if height < 38 or width < 130:
+        return TIER_NORMAL
+    return TIER_SPACIOUS
+
+
+def main_footer_hint(width: int, tier: str) -> str:
+    if tier == TIER_COMPACT or width < 92:
+        return "[Tab] focus  [Space] draft  [Enter] apply  [Q] quit"
+    if tier == TIER_NORMAL or width < 128:
+        return "[Tab] focus   [↑/↓] move   [Space] draft   [Enter] apply   [?] help   [Q] quit"
+    return "[Tab] focus   [↑/↓] move   [Space] select draft   [Enter] confirm apply   [D] delete   [?] help   [Q] quit"
+
+
+def scroll_start(index: int, visible_items: int, total_items: int) -> int:
+    if total_items <= visible_items:
+        return 0
+    if index < 0:
+        return 0
+    max_start = max(0, total_items - visible_items)
+    return min(max_start, max(0, index - visible_items + 1))
+
+
+def focus_title(text: str, focused: bool) -> str:
+    return f" {text.upper()} " if focused else text
+
+
+def rule(width: int, *, max_width: int = 82) -> str:
+    return "─" * max(0, min(width, max_width))
+
+
+def render_history(history: list[str], width: int) -> list[tuple[str, str]]:
+    rendered: list[tuple[str, str]] = []
+    for line in history[-30:]:
+        level, message = history_level(line)
+        chunks = textwrap.wrap(message, max(12, width - 8)) or [""]
+        rendered.append((level, chunks[0]))
+        rendered.extend(("", chunk) for chunk in chunks[1:])
+    return rendered
+
+
+def history_level(message: str) -> tuple[str, str]:
+    lower = message.lower()
+    if lower.startswith(">"):
+        return "CMD", message
+    if "failed" in lower or lower.startswith("error") or lower.startswith("mix failed"):
+        return "ERR", message
+    if lower.startswith("doctor:") or lower.startswith("warning") or "canceled" in lower:
+        return "WARN", message
+    if lower.startswith("applied") or lower.startswith("deleted") or lower.startswith("restored"):
+        return "OK", message
+    if lower.startswith("draft") or "press enter" in lower:
+        return "NEXT", message
+    return "INFO", message
+
+
+def level_attr(level: str) -> int:
+    return {
+        "ERR": STYLE_ERROR,
+        "WARN": curses.A_BOLD,
+        "OK": curses.A_BOLD,
+        "NEXT": curses.A_BOLD,
+        "CMD": curses.A_DIM,
+        "INFO": curses.A_DIM,
+    }.get(level, curses.A_DIM)
+
+
+def item_badge(status: ProfileStatus, kind: str, active: bool) -> str:
+    if active:
+        return "active"
+    if kind == "auth":
+        return status.auth_mode or "auth"
+    if status.base_url:
+        return "gateway"
+    if status.mode == "auth":
+        return "official"
+    return status.mode or "route"
+
+
+def item_detail(status: ProfileStatus, kind: str) -> str:
+    if kind == "auth":
+        if status.auth_present:
+            return "ChatGPT auth.json"
+        return "missing auth.json"
+    if status.base_url:
+        parsed = urlparse(status.base_url)
+        endpoint = parsed.netloc or status.base_url
+    else:
+        endpoint = status.provider or "OpenAI"
+    return f"{endpoint}  {status.model or '-'}"
+
+
+def route_effect_label(status: ProfileStatus | None, *, has_auth: bool) -> str:
+    if status is None:
+        return "choose a gateway route"
+    if status.auth_is_ignored:
+        return "API credentials; copied auth ignored"
+    if has_auth and status.base_url:
+        return "uses selected auth + gateway"
+    if status.mode == "hybrid":
+        return "uses selected auth + gateway"
+    if status.mode == "auth":
+        return "uses selected auth.json"
+    if status.base_url:
+        return "custom route behavior unknown"
+    return "check cps status"
 
 
 def route_detail(status: ProfileStatus) -> str:

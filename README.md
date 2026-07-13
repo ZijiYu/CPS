@@ -10,22 +10,22 @@
 Version: 1.0.4
 ```
 
-> CPS is a tiny terminal tool for composing Codex auth profiles and API routes fast.
+> CPS is a tiny terminal tool for using official Codex auth login with gateway forwarding.
 >
-> Many Codex users do not have just one account, one API key, or one configuration.
+> The core flow is: log in with Codex/ChatGPT auth, then route model requests through a stable gateway provider.
 
-It lets you keep Auth and API / Route configs separate:
+It keeps official auth and gateway routing separate:
 
 ```text
-Auth        -> auth.json / ChatGPT login
-API / Route -> config.toml / provider / model / base_url / API key
+Auth login    -> auth.json / ChatGPT login
+Gateway route -> config.toml / provider / model / base_url
 ```
 
-Then you can combine them without manually editing `~/.codex`.
+Then it applies the pair without manually editing `~/.codex`.
 
 ```text
 $ cps
-Auth profile + API route -> ~/.codex
+Auth login + Gateway route -> ~/.codex
 ```
 
 ## Install
@@ -49,12 +49,14 @@ Open the TUI:
 cps
 ```
 
+![CPS TUI preview](docs/assets/cps-tui-preview.png)
+
 Main flow:
 
 ```text
-1. Choose one Auth profile
-2. Choose one API / Route profile
-3. Press M to Apply Selection
+1. Choose one Auth login
+2. Choose one Gateway route
+3. Press Enter to review the draft pair, then confirm to apply
 4. Press R to Restart Codex
 ```
 
@@ -62,7 +64,7 @@ Create profiles from the TUI:
 
 ```text
 O Menu -> New Auth Login
-O Menu -> New API Route
+O Menu -> New Gateway Route
 ```
 
 ## CLI Quick Commands
@@ -71,6 +73,7 @@ O Menu -> New API Route
 cps init auth personal
 cps init route work
 cps mix personal work
+cps doctor
 cps restart
 ```
 
@@ -94,9 +97,22 @@ cps route official --model gpt-5.5
 ```text
 ~/.codex                 active Codex config
 ~/.codex-profiles        saved CPS profiles
+~/.codex-profiles/.cps.lock serializes CPS writes
+~/.codex-profiles/<profile>/profile.json non-secret profile metadata
 ~/.codex-profiles/deleted reversible deletes
 ~/.codex-profiles/backups switch-time backups
 ```
+
+## Diagnose
+
+```bash
+cps doctor
+```
+
+`doctor` checks for common switch-time problems: missing Codex CLI, reserved
+provider overrides such as `[model_providers.OpenAI]`, stale last-mix pointers,
+missing auth files, and custom routes that may need a Codex restart before the
+model picker refreshes.
 
 ## Star History
 

@@ -2,7 +2,9 @@
 
 [English](../README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
-> Note: this translation may lag behind the latest Auth + API / Route two-column TUI. See the English or Simplified Chinese README for the current interaction model.
+> Note: this translation may lag behind the latest Auth + Gateway two-column TUI. See the English or Simplified Chinese README for the current interaction model.
+>
+> Current safety additions: `cps doctor` diagnoses active config and profiles, CPS serializes writes with `~/.codex-profiles/.cps.lock`, and new profiles include non-secret `profile.json` metadata.
 
 ```text
 ╔════════════════════════════════════════════════════════════════╗
@@ -204,18 +206,31 @@ cps restore old-profile-20260612-153000
 Auth profile：
 
 ```toml
-[model_providers.OpenAI]
+model_provider = "gateway"
+
+[model_providers.gateway]
+name = "gateway"
+wire_api = "responses"
 requires_openai_auth = true
 ```
 
 API profile：
 
 ```toml
-[model_providers.OpenAI]
+model_provider = "gateway"
+model = "gpt-5.5"
+
+[model_providers.gateway]
+name = "gateway"
+base_url = "https://your-endpoint.example.com/v1"
+wire_api = "responses"
 env_key = "OPENAI_API_KEY"
+requires_openai_auth = false
 ```
 
 TUI では、API profile のディレクトリに `auth.json` が存在する場合があります。ただし profile mode が API の場合、CPS はその auth を ignored と表示します。
+
+CPS は active `model_provider` を auth route と API route の両方で `gateway` に正規化し、Codex Desktop の会話履歴が provider 名の変更で隠れないようにします。`openai` は予約済み provider ID なので、`[model_providers.openai]` / `[model_providers.OpenAI]` は生成しません。
 
 ## Safety
 
