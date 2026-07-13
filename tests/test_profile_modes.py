@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from codex_profile_switcher.core import ProfileStore, detect_mode
+from codex_profile_switcher.core import ProfileStore, detect_mode, read_profile_metadata
 
 
 def write_auth(path: Path) -> None:
@@ -37,7 +37,7 @@ wire_api = "responses"
         self.assertEqual(detect_mode(config, {"tokens": {"access_token": "redacted"}}, "custom"), "hybrid")
 
 
-    def test_mix_api_route_reports_auth_ignored_and_pins_stable_provider(self):
+    def test_mix_api_route_uses_selected_auth_with_gateway(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir) / "profiles"
             codex_dir = Path(temp_dir) / "active"
@@ -74,8 +74,9 @@ requires_openai_auth = false
             active = store.active_status()
             config = (codex_dir / "config.toml").read_text(encoding="utf-8")
 
-            self.assertEqual(active.mode, "api")
-            self.assertTrue(active.auth_is_ignored)
+            self.assertEqual(active.mode, "hybrid")
+            self.assertFalse(active.auth_is_ignored)
+            self.assertTrue(active.route_uses_auth)
             # Provider is pinned to the stable, non-reserved name (not the route
             # profile name) so Codex Desktop keeps one conversation-history bucket.
             self.assertEqual(active.provider, "gateway")
@@ -86,8 +87,9 @@ requires_openai_auth = false
             self.assertNotIn("[model_providers.openai]", config.lower())
             # Route keys survive the rename.
             self.assertIn('base_url = "https://gateway.example/v1"', config)
-            self.assertIn('env_key = "OPENAI_API_KEY"', config)
-            self.assertIn("requires_openai_auth = false", config)
+            self.assertIn("requires_openai_auth = true", config)
+            self.assertNotIn("env_key", config)
+            self.assertNotIn("experimental_bearer_token", config)
             self.assertEqual(
                 (codex_dir / "auth.json").read_text(encoding="utf-8"),
                 (andy / "auth.json").read_text(encoding="utf-8"),
@@ -189,8 +191,10 @@ class ProviderStabilityTests(unittest.TestCase):
 
             store.mix_profiles("personal", "work")
             self.assertEqual(store.active_status().provider, "gateway")
+            self.assertEqual(store.active_status().mode, "hybrid")
             store.mix_profiles("personal", "alt")
             self.assertEqual(store.active_status().provider, "gateway")
+            self.assertEqual(store.active_status().mode, "hybrid")
 
     def test_account_uses_gateway_auth_section(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -277,6 +281,53 @@ class ProviderStabilityTests(unittest.TestCase):
             self.assertIn('env_key = "OPENAI_API_KEY"', config)
             self.assertIn("requires_openai_auth = false", config)
             self.assertNotIn("experimental_bearer_token", config)
+            metadata = read_profile_metadata(path)
+            self.assertEqual(metadata["kind"], "route")
+            self.assertEqual(metadata["credential_mode"], "env_key")
+            self.assertEqual(metadata["env_key"], "OPENAI_API_KEY")
+
+    def test_create_route_profile_metadata_does_not_store_api_key(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store, _root, _codex_dir = self._make_store(temp_dir)
+
+            path = store.create_route_profile(
+                "work",
+                base_url="https://gateway.example/v1",
+                model="gpt-5.5",
+                api_key="sk-secret-key",
+            )
+
+            metadata_text = (path / "profile.json").read_text(encoding="utf-8")
+            metadata = read_profile_metadata(path)
+            self.assertEqual(metadata["credential_mode"], "bearer_token")
+            self.assertNotIn("sk-secret-key", metadata_text)
+
+    def test_doctor_reports_reserved_provider_sections(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store, root, codex_dir = self._make_store(temp_dir)
+            (codex_dir / "config.toml").write_text(
+                'model_provider = "OpenAI"\n\n[model_providers.OpenAI]\nrequires_openai_auth = true\n',
+                encoding="utf-8",
+            )
+            profile = root / "legacy"
+            profile.mkdir(parents=True)
+            (profile / "config.toml").write_text(
+                "[model_providers.OpenAI]\nrequires_openai_auth = true\n",
+                encoding="utf-8",
+            )
+
+            messages = [item.message for item in store.diagnose()]
+
+            self.assertTrue(any("reserved provider override" in message for message in messages))
+
+    def test_write_operations_create_lock_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store, _root, codex_dir = self._make_store(temp_dir)
+            (codex_dir / "config.toml").write_text("", encoding="utf-8")
+
+            store.route_official(model="gpt-5.5")
+
+            self.assertTrue(store.lock_path().exists())
 
     def test_route_official_uses_gateway_auth_section(self):
         with tempfile.TemporaryDirectory() as temp_dir:

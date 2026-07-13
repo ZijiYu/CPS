@@ -15,6 +15,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("tui")
     sub.add_parser("status", help="show active config and saved profile structure")
+    sub.add_parser("doctor", help="diagnose active Codex config and saved profiles")
     sub.add_parser("list", help="list saved profiles")
     sub.add_parser("deleted", help="list reversibly deleted profiles")
     sub.add_parser("doc", help="show full CPS documentation")
@@ -55,6 +56,13 @@ def main() -> None:
         for name in store.list_profiles():
             print()
             print_status(store.profile_status(name))
+    elif command == "doctor":
+        diagnostics = store.diagnose()
+        if not diagnostics:
+            print("doctor: ok")
+        else:
+            for item in diagnostics:
+                print(f"{item.level}: {item.subject}: {item.message}")
     elif command == "list":
         for name in store.list_profiles():
             print(name)
@@ -130,6 +138,7 @@ def main() -> None:
 def print_status(status) -> None:
     print(f"{status.name}: {status.mode}")
     print(f"  path: {status.path}")
+    print(f"  kind: {status.profile_kind or '-'}")
     print(f"  model: {status.model or '-'}")
     print(f"  provider: {status.provider or '-'}")
     print(f"  base_url: {status.base_url or '-'}")
@@ -164,12 +173,12 @@ def print_doc() -> None:
         """CPS - Codex Profile Switcher
 
 Purpose:
-  CPS separates Codex auth from model routing, then lets you compose them.
+  CPS combines official Codex auth login with gateway forwarding.
 
 Core idea:
   Auth profile        -> auth.json / ChatGPT login
-  API / Route profile -> config.toml / provider / model / base_url / API key
-  Apply Selection     -> writes the selected Auth + API / Route into ~/.codex
+  Gateway route       -> config.toml / provider / model / base_url
+  Apply               -> writes the confirmed Auth + Gateway route into ~/.codex
 
 Route effect:
   cps status reports auth_effect so API-key routes are not mistaken for
@@ -181,9 +190,10 @@ TUI:
 
 Main keys:
   Up/Down             move in current column
-  Tab or Left/Right   switch Auth / API column
-  Enter               select current item
-  M                   apply selected Auth + API / Route
+  Tab or Left/Right   switch Auth / Gateway column
+  Space               select current item as draft
+  Enter               review and apply selected Auth + Gateway draft
+  D                   delete selected profile after confirmation
   O                   open menu
   R                   restart Codex
   ?                   help
@@ -191,12 +201,13 @@ Main keys:
 
 Menu:
   New Auth Login      create an auth profile and run codex login
-  New API Route       create a route-only API profile from a form
+  New Gateway Route   create a gateway forwarding profile from a form
 
 Common CLI:
   cps init auth personal
   cps init route work
   cps mix personal work
+  cps doctor
   cps restart
 
 Custom API route:
@@ -211,6 +222,8 @@ Official route:
 State:
   ~/.codex                 active Codex config
   ~/.codex-profiles        saved CPS profiles
+  ~/.codex-profiles/.cps.lock serializes CPS writes
+  ~/.codex-profiles/<profile>/profile.json stores non-secret profile metadata
   ~/.codex-profiles/deleted reversible deletes
   ~/.codex-profiles/backups switch-time backups
 
@@ -221,16 +234,21 @@ Safety:
     cps restore <deleted-profile>
 
 Release notes:
+  1.0.5
+    - Version bump for the gateway workflow safety release
+
   1.0.4
     - Full-screen menu for creation flows
-    - New API Route and New Auth Login forms
-    - Apply Selection wording
+    - New Gateway Route and New Auth Login forms
+    - TUI stages Auth + Gateway as a draft before confirmed apply
     - auth_effect status for API routes that ignore copied auth.json
+    - cps doctor diagnostics for config/profile issues
+    - Write lock and non-secret profile metadata
     - Scroll-aware pages for smaller terminals
     - Safer profile and provider name handling
 
   1.0.3
-    - Auth and API / Route columns in the TUI
+    - Auth and Gateway columns in the TUI
     - File composition with cps mix <auth> <route>
     - Split init auth / init route / init full commands
     - Route helpers for official and custom API endpoints

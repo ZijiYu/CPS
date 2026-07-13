@@ -7,23 +7,25 @@
 ║   CPS - Codex Profile Switcher                                ║
 ╚════════════════════════════════════════════════════════════════╝
 
-Version: 1.0.4
+Version: 1.0.5
 ```
 
-> CPS is a small terminal tool for switching Codex auth profiles and API routes without manually editing `~/.codex`.
+> CPS is a tiny terminal tool for using official Codex auth login with gateway forwarding.
+>
+> The core flow is: log in with Codex/ChatGPT auth, then route model requests through a stable gateway provider.
 
-Many Codex users do not have just one account, one API key, or one configuration. CPS lets you keep the two parts of a Codex setup separate:
+It keeps official auth and gateway routing separate:
 
 ```text
-Auth        -> auth.json / ChatGPT login
-API / Route -> config.toml / provider / model / base_url / API key
+Auth login    -> auth.json / ChatGPT login
+Gateway route -> config.toml / provider / model / base_url
 ```
 
-Then you can combine them when needed:
+Then it applies the pair without manually editing `~/.codex`.
 
 ```text
 $ cps
-Auth profile + API route -> ~/.codex
+Auth login + Gateway route -> ~/.codex
 ```
 
 ## What CPS is for
@@ -31,8 +33,8 @@ Auth profile + API route -> ~/.codex
 Use CPS when you want to:
 
 - switch between personal and work Codex accounts;
-- keep multiple OpenAI API keys or OpenAI-compatible API routes;
-- use one ChatGPT login state with a different API route;
+- keep multiple API keys or OpenAI-compatible routes;
+- use one ChatGPT login state with a different gateway route;
 - avoid manually copying `auth.json` and `config.toml` in `~/.codex`;
 - keep project-specific Codex configs separated.
 
@@ -43,7 +45,7 @@ Use CPS when you want to:
 This is the fastest way if you only want to use CPS:
 
 ```bash
-python3 -m pip install "git+https://github.com/ZijiYu/CPS-codex_profile_switcher.git"
+python3 -m pip install "git+https://github.com/ZijiYu/CPS.git"
 ```
 
 After installation, check that the command is available:
@@ -65,8 +67,8 @@ Use this method if you want to read the code, edit it, or run the latest local v
 Clone with Git:
 
 ```bash
-git clone https://github.com/ZijiYu/CPS-codex_profile_switcher.git
-cd CPS-codex_profile_switcher
+git clone https://github.com/ZijiYu/CPS.git
+cd CPS
 python3 -m pip install -e .
 ```
 
@@ -79,7 +81,7 @@ Code -> Download ZIP -> unzip it -> open the extracted folder in Terminal
 Then install from the extracted folder:
 
 ```bash
-cd CPS-codex_profile_switcher
+cd CPS
 python3 -m pip install -e .
 ```
 
@@ -87,7 +89,6 @@ The project exposes these commands after installation:
 
 ```text
 cps
-cpx
 codex-profiles
 ```
 
@@ -98,7 +99,7 @@ codex-profiles
 If you use `pipx`:
 
 ```bash
-pipx install "git+https://github.com/ZijiYu/CPS-codex_profile_switcher.git"
+pipx install "git+https://github.com/ZijiYu/CPS.git"
 ```
 
 ## Start
@@ -109,12 +110,14 @@ Open the TUI:
 cps
 ```
 
+![CPS TUI preview](docs/assets/cps-tui-preview.png)
+
 Main flow:
 
 ```text
-1. Choose one Auth profile
-2. Choose one API / Route profile
-3. Press M to Apply Selection
+1. Choose one Auth login
+2. Choose one Gateway route
+3. Press Enter to review the draft pair, then confirm to apply
 4. Press R to Restart Codex
 ```
 
@@ -122,7 +125,7 @@ Create profiles from the TUI:
 
 ```text
 O Menu -> New Auth Login
-O Menu -> New API Route
+O Menu -> New Gateway Route
 ```
 
 ## CLI Quick Commands
@@ -131,6 +134,7 @@ O Menu -> New API Route
 cps init auth personal
 cps init route work
 cps mix personal work
+cps doctor
 cps restart
 ```
 
@@ -154,9 +158,22 @@ cps route official --model gpt-5.5
 ```text
 ~/.codex                 active Codex config
 ~/.codex-profiles        saved CPS profiles
+~/.codex-profiles/.cps.lock serializes CPS writes
+~/.codex-profiles/<profile>/profile.json non-secret profile metadata
 ~/.codex-profiles/deleted reversible deletes
 ~/.codex-profiles/backups switch-time backups
 ```
+
+## Diagnose
+
+```bash
+cps doctor
+```
+
+`doctor` checks for common switch-time problems: missing Codex CLI, reserved
+provider overrides such as `[model_providers.OpenAI]`, stale last-mix pointers,
+missing auth files, and custom routes that may need a Codex restart before the
+model picker refreshes.
 
 ## Troubleshooting
 
@@ -186,29 +203,29 @@ README.md
 src/
 ```
 
-### You installed from ZIP but `cd CPS-codex_profile_switcher` fails
+### You installed from ZIP but `cd CPS` fails
 
 GitHub ZIP downloads may extract to a folder such as:
 
 ```text
-CPS-codex_profile_switcher-main
+CPS-main
 ```
 
 Use the actual extracted folder name:
 
 ```bash
-cd CPS-codex_profile_switcher-main
+cd CPS-main
 python3 -m pip install -e .
 ```
 
 ## Uninstall
 
 ```bash
-python3 -m pip uninstall codex-profiles
+python3 -m pip uninstall codex-profile-switcher
 ```
 
 CPS stores saved profiles under `~/.codex-profiles`. Uninstalling the Python package does not automatically delete your saved profiles.
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ZijiYu%2FCPS-codex_profile_switcher&type=Date)](https://www.star-history.com/?type=date&repos=ZijiYu%2FCPS-codex_profile_switcher)
+[![Star History Chart](https://api.star-history.com/svg?repos=ZijiYu%2FCPS&type=Date)](https://www.star-history.com/?type=date&repos=ZijiYu%2FCPS)
